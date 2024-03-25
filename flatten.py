@@ -573,7 +573,7 @@ parser.add_argument('-ctr', '--cyc_suite_tr', nargs=2, type=str, help='Excel <te
 sys.argv.append('--flatdir')
 sys.argv.append('./inputdir')
 
-#cmd line: --flatdir ./inputdir
+#cmd line: python flatten.py --flatdir ./inputdir
 
 #sys.argv.append('--cyc_suite_tr')
 #sys.argv.append('./outputdir/Krackan_1_DF_Diagnostics_Status_Tracker 2.0_fixed_2024-03-22_14_27_39_test_runs.xlsx')
@@ -581,6 +581,7 @@ sys.argv.append('./inputdir')
 
 # sys.argv.append(False)
 
+# cmd line: python flatten.py --cyc_suite_tr ./outputdir/<file> False
 
 # sys.argv.append('--combine')
 # sys.argv.append('../Diags-NV48 - Requirement - 20240206.xlsx')
