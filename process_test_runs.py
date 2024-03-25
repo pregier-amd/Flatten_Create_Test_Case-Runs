@@ -20,11 +20,14 @@ import qtest
 import configparser
 
 class Process_Test_Runs(object):
-  def __init__(self,logger = None, config =None ):
+  def __init__(self,logger = None, config =None, dateTStr=None ):
       if( not config):
           config = configparser.ConfigParser()
           config.read('config.ini')
       self.config = config
+
+      self.dateTStr = dateTStr
+
       # Hold the qTest Mappings IDs, and 
       self.qtest_dict ={}
 
@@ -157,9 +160,10 @@ class Process_Test_Runs(object):
 
   def append_suffix(self,inputfile=None,suffix=None,extension=".xlsx"):
       filebase = os.path.splitext(inputfile)[0]
-      now = datetime.now()
-      now = now.strftime("%Y-%m-%d_%H_%M_%S")
-      outfile = filebase + "_" + str(now) + "_" + suffix + extension
+      if not self.dateTStr:
+          now = datetime.now()
+          self.dateTStr = now.strftime("%Y-%m-%d_%H_%M_%S")
+      outfile = filebase + "_" + str(self.dateTStr) + "_" + suffix + extension
       return outfile
 
   def init_parameters(self,data):
