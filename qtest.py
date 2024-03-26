@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from datetime import date # Set Timezone
 import pytz
+import time
 class Qtest(object):
   projects = []
   data_cache={}
@@ -22,6 +23,8 @@ class Qtest(object):
       self.tc = ''
       self.tr = ''
       self.tl = ''
+      # request Re-try
+      self.request_retry = 3
 
       if(not logger):
           self.logger = self.log('qtest.log')
@@ -247,7 +250,19 @@ class Qtest(object):
               endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-runs'
               params = {'parentId': parentId, 'parentType': 'test-suite'}
               body = self.frmt_create_test_run(name,None)
-              data = self.get_request(endpoint,params,None,None)
+
+              for rq in range(1,self.request_retry):
+                while True:
+                    try:
+                        # do stuff
+                        data = self.get_request(endpoint,params,None,None)
+                        num_items = len(data['items'])
+                    except e:
+                        self.logger.error("Request Did not return Items. Data: " + " Try: " + str(rq) + "/" + str(self.request_retry) + " Msg: " + str(data) )
+                        time.sleep(2)
+                        continue
+                    break
+              
               # Create if missing
               for i in data['items']:
                   # break if cycle present

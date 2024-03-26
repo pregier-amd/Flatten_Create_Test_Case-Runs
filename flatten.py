@@ -563,25 +563,25 @@ parser.add_argument('-fltd', '--flatdir', nargs=1, type=str, help='Directory Con
 parser.add_argument('-fltf', '--flatfile', nargs='*', type=str, help='Excel File to Flatten <inputfilename> ') 
 parser.add_argument('-cmb', '--combine', nargs=3, type=str, help='Excel Request Excel <requestfilename>  <Flat inputfilename> <output file>') 
 #input is a cut down diags_raw_data Sheet. Supports Pre-silicon and Post Silicon Rus for same Test Cases.
-parser.add_argument('-ctr', '--cyc_suite_tr', nargs=2, type=str, help='Excel <test runs excel> <exec True/[False]') 
+parser.add_argument('-ctr', '--cyc_suite_tr', nargs=3, type=str, help='Excel <test runs excel> <exec True/[False]> <skip to expanded line number>') 
 
 # combine_req_ip
 
 #sys.argv.append('--flatfile')
 #sys.argv.append('<.xlsm>')
 
-sys.argv.append('--flatdir')
-sys.argv.append('./inputdir')
+#sys.argv.append('--flatdir')
+#sys.argv.append('./inputdir')
 
 #cmd line: python flatten.py --flatdir ./inputdir
 
-#sys.argv.append('--cyc_suite_tr')
-#sys.argv.append('./outputdir/Krackan_1_DF_Diagnostics_Status_Tracker 2.0_fixed_2024-03-22_14_27_39_test_runs.xlsx')
-#sys.argv.append('./outputdir/Krackan1_GMHUB_Diagnostics_Status_Tracker (4)_2024-03-25_08_28_57_test_runs.xlsx')
+sys.argv.append('--cyc_suite_tr')
+sys.argv.append('./outputdir/Krackan1_GMHUB_Diagnostics_Status_Tracker (4)_2024-03-25_08_28_57_test_runs.xlsx')
 
-# sys.argv.append(False)
+sys.argv.append(False)
+sys.argv.append('842')
 
-# cmd line: python flatten.py --cyc_suite_tr ./outputdir/<file> False
+# cmd line: python flatten.py --cyc_suite_tr ./outputdir/<file> False None/number
 
 # sys.argv.append('--combine')
 # sys.argv.append('../Diags-NV48 - Requirement - 20240206.xlsx')

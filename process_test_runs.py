@@ -146,6 +146,10 @@ class Process_Test_Runs(object):
 
   def cyc_suite_tr(self,data):
 
+      self.first_expanded_row = 0
+      if len(data) == 3:
+         self.first_expanded_row = int(data[2])
+
       # read Args and pull the Input filename.
       # reads _flat data
       flat_data,filename = self.init_parameters(data)
@@ -209,6 +213,10 @@ class Process_Test_Runs(object):
       cnt = 0
       variations = 0
       for row in data:
+          if cnt < self.first_expanded_row:
+              # Skip row.
+              cnt = cnt+1
+              continue
 
           #    Pre-Silicon and Post Silicon Entry Puts these in Different Releases.
           # Get the Current create / get test_cycle Name is IP
