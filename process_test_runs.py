@@ -62,51 +62,77 @@ class Process_Test_Runs(object):
           self.system_exit(mesg)
 
       # Test Case Class Variable
-      # Dictionary of the test Cases: { name:{data}, name2:{data}...}
-      self.tc ={}
+      # Dictionary of the tc = test Cases, tr=test_runs: { name:{data}, name2:{data}...}
+      self.tc =[]
+      self.tr =[]
 
   def find_tc(self,name=None,id=None):
-      # Chech the List of already used test Cases.
-      results = self.lookup_data(self.tc,name)
 
-      # Pull from qTest the Specific Test Case.
-      if results:
-          return results
-      else:         
-         results = self.get_specified_tc( name )
-         if not results:
+      # Check the List of already used test Cases.
+      results = self.lookup_data(self.tc,'test-cases',name)
+      if not results:
              results = []
       return results
-
-  def get_specified_tc(self,name, body=None):  
+ 
+  
+  def get_obj_all(self,name=None, body=None,obj_data={},obj_type='test-cases'):  
       #use Web AI and get dat from qTest.
+      if not name:
+          # pull in all Test Cases
+          name = '%'  
       if not body:
           body={
-                 "object_type": "test-cases",
-                 "fields": ["name","id","pid"],
+                 "object_type": obj_type ,
+                 "fields": ["name","id","pid","parentId"],
                  "query": "'name' ~ " + str(name)
                 }
       # on error return the data.
-      data = self.qt.search_body(body, obj_type='test-cases')
-      self.error = data
+#      data = self.qt.search_body(body, obj_type='test-cases')
+      data = self.qt.search_body_all(body, obj_type)
+
+      results = self.store_obj_data(data,obj_data)
+      self.logger.info("Get All " + str(obj_type) + " Cnt:" + str(len(obj_data)))
+      return results
+     
+  def store_obj_data(self,indata={},obj_data={}):
       results = None
-      if 'items' in data:
+      if 'items' in indata:
           #results = data['items']
           #Add results to  test Case List
-          for tc in data['items']:
+          # tc is stores {xxx:{id:123,name:xxx},yyyy:{'name':yyyy},z{}}
+          for i in indata['items']:
               # Save the Data from qtest into variable
-              results = self.tc[tc['name']] = tc
-              logging.info("Return TC: Data: " + str(tc) )
-      # On success returns {'id':xxx,'name':xxx}
+              #esults = self.tc['name']] = i
+#              results = obj_data[i['name']] = i
+              results = obj_data.append(i)
+              #logging.info("Return Obj: Data: " + str(i) )
+              # On success returns last data type{'id':xxx,'name':xxx}
+      else:
+          self.error = indata 
+          results = {}
       return results
 
-  def lookup_data(self,tc,name):
-      # tc is stores [xxx:{id:123,name:xxx},yyyy:{'name':yyyy},z{}]
-      result=None
-      if name in tc:
-          result = tc[name]
-      return result
+  def lookup_data(self,obj_data=None,obj_type='test-cases',name=None,parentid=None):
 
+      # Pull all test Cases from qTest all test Cases:
+      results = {}
+
+      if not obj_data :
+        # get_tc_all( name, body, self.tc,obj_type='test-cases')
+        results = self.get_obj_all( None, None, obj_data , obj_type)
+
+      #  template for using filter list(filter(lambda d: d['type'] in keyValList, exampleSet))
+      if not parentid:
+          filt_obj = list(filter(lambda d: d['name'] == name ,obj_data ))
+      else: 
+          # use paraent ID 
+          filt_obj = list(filter(lambda d: d['name'] == name and d['parentId'] == parentid ,obj_data ))
+      self.logger.info("Filtered Dict:" + str(filt_obj))
+
+      # use last Matching Name
+      for i in filt_obj:
+          results = i
+      return results
         
   def system_exit(self,mseg=None):
       self.logger.error('System Exit: ' + str(mseg) )
@@ -505,16 +531,21 @@ class Process_Test_Runs(object):
             #             
             tc = self.find_tc(row['Test Case ID'])
             self.logger.info("For tr Name: "+ tr_name +" Use Test Case: " + str(tc) )
-            if(tc):
-                # if a Test Case Has been Found Create the Test Run:
-                self.tr = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)
-                self.logger.info("Row: " + str(cnt) + "\tRL: " + str(release) + "\tCL: " + str(cycle) + "\tTS: " + str(suite) + "\tTR: " + str(tr_name) +" TR: " + str(self.tr['id'] ) )
+            if not tc:
+                # No Test Case:
+                return None
+            # Test Case Available: Find or Create a Test Run
 
-        #If Variation andPost vs Pre Etc... Create the test Run
-#        if( self.enabled_tr(pre_flag,row) ):
-#              # Get the Test Case Data .. Save in self.tc to be used on repeated test Runs. (I.e. Pre then Post)
-#              self.populate_tc(row)
-#              self.populate_tr(row,execute=False)
+            # if a Test Case Has been Found Create the Test Run:
+            # test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)
+            #qtest_dict[] not used
+            test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)                                
+            self.logger.info("TR Row: " + str(cnt) + "\tRL: " + str(release) + "\tCL: " + str(cycle) + "\tTS: " + str(suite) + "\tTR: " + str(tr_name) +" TR: " + str(test_run['name'] ) )
+        # If true Create a Run Log
+        if config['qtest'].getboolean('create_test_log_flag'):
+            # use the Test Run:
+
+            
 
 
   def popul_release(self,name=None):
@@ -542,7 +573,7 @@ class Process_Test_Runs(object):
                   # no obj Create one
                   #New Test-Cycle add it to the Dictionary.
                   # Create or Read CL Obj Return data:
-                  data = self.qt.find_create_obj(name,obj_type,parentId=parent['id'])
+                  data = self.qt.find_create_obj(name,obj_type,parent['id'])
                   qtest_dict[name] = data
               else:
                   data = qtest_dict[name]
@@ -554,22 +585,28 @@ class Process_Test_Runs(object):
                   # no obj Create one
                   #New Test-Cycle add it to the Dictionary.
                   # Create or Read CL Obj Return data:
-                  data = self.qt.find_create_obj(name,obj_type,parentId=parent['id'])
+                  data = self.qt.find_create_obj(name,obj_type,parent['id'])
                   qtest_dict[name] = data
               else:
                   data = qtest_dict[name]
           case 'test-run':
               # Check for Key 'test-suite' in release.
               # if the key is present then there is a Test Case.
-              
-              if not name in qtest_dict:
+              # lookup name and parent ID
+              # looks up in list [{tr},{tr},{tr}]
+              # if self.tr is empty read all from Project and populdate self.tr
+              tr = self.lookup_data(self.tr,'test-runs',name,qtest_dict['id'])
+              # if not name in qtest_dict:
+              if len(tr) == 0:
                   # no obj Create one
                   #New Test-Cycle add it to the Dictionary.
                   # Create or Read CL Obj Return data:
                   data = self.qt.find_create_obj(name,obj_type,parent['id'],tc)
-                  qtest_dict[name] = data
+                  # qtest_dict[name] = data
+                  # add test Run to  list
+                  self.tr.append(data)
               else:
-                  data = qtest_dict[name]
+                  data = tr
           case _:
               self.system_exit('Error Unsupported Obj Type: ' + str(obj_type))
      return data

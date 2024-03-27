@@ -50,6 +50,29 @@ class Qtest(object):
   def post_request(self,endpoint,params=None,body=None,headers=None):
       return self.request('post',endpoint,params,body,headers)
 
+  def post_request_all(self,endpoint,params=None,body=None,headers=None,page=1):
+      # Use Page
+      if not params:
+        params = {}
+        params['page_size'] = self.config['qtest']['page_size']
+      outdata = {'items':[]}
+      self.logger.info("post_request_all Body:" + str(body))
+
+      while True:
+          params['page'] = page
+          data = self.request('post',endpoint,params,body,headers)
+          #self.logger.info("data:" + str(data))
+          if page % 5 == 0 :
+             self.logger.info("Page:" + str(page))
+          if not 'items' in data or len(data['items']) == 0:
+              #error or no data was sent.
+              break
+          outdata['items'] = outdata['items'] + data['items']
+          page += 1      
+      return outdata
+
+
+
   def put_request(self,endpoint,params=None,body=None,headers=None):
       return self.request('put',endpoint,params,body,headers)
 
@@ -125,13 +148,29 @@ class Qtest(object):
       data = self.post_request(endpoint,params,body)
       return data
 
+  def search_body_all(self, body=None, obj_type='test-cases'):
+      valid_obj_types = [ 'releases' , 'requirements', 'test-cases', 
+                          'test-runs', 'test-suites', 'test-cycles',
+                          'test-logs', 'builds',      'defects'
+                        ]
+      if obj_type not in valid_obj_types :
+         raise("Invalid Object type: " + obj_type + "Must be one of: "+ str(valid_obj_types) )
+      endpoint = 'projects/' + str(self.proj_id) + '/' + 'search'
+      if(not body):
+          body={ "object_type": obj_type, "fields": ["*"],"query": "name = " + '%' }
+      
+      params = None
+      # Uses Page and Page Size
+      data = self.post_request_all(endpoint,params,body)
+      return data
+
   def search_body(self, body=None, obj_type='test-cases'):
       valid_obj_types = [ 'releases' , 'requirements', 'test-cases', 
                           'test-runs', 'test-suites', 'test-cycles',
                           'test-logs', 'builds',      'defects'
                         ]
       if obj_type not in valid_obj_types :
-         raise("Invalid Object type: " + obj_type + "Must be one of: "+ str(valid_bj_types))
+         raise("Invalid Object type: " + obj_type + "Must be one of: "+ str(valid_obj_types) )
       endpoint = 'projects/' + str(self.proj_id) + '/' + 'search'
       if(not body):
           body={ "object_type": obj_type, "fields": ["*"],"query": "name = " + '%' }
@@ -257,7 +296,7 @@ class Qtest(object):
                         # do stuff
                         data = self.get_request(endpoint,params,None,None)
                         num_items = len(data['items'])
-                    except e:
+                    except:
                         self.logger.error("Request Did not return Items. Data: " + " Try: " + str(rq) + "/" + str(self.request_retry) + " Msg: " + str(data) )
                         time.sleep(2)
                         continue

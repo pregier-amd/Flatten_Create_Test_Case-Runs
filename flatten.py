@@ -531,7 +531,7 @@ class Flatten(object):
     def cyc_suite_tr(self,data):
         #Call class to Create the Cycles, Test Suites, and Test Runs as needed
         import process_test_runs
-        ptr= process_test_runs.Process_Test_Runs()
+        ptr= process_test_runs.Process_Test_Runs(self.logger)
         #ptr.init_parameters(data)
         ptr.cyc_suite_tr(data)
 
@@ -576,10 +576,10 @@ parser.add_argument('-ctr', '--cyc_suite_tr', nargs=3, type=str, help='Excel <te
 #cmd line: python flatten.py --flatdir ./inputdir
 
 sys.argv.append('--cyc_suite_tr')
-sys.argv.append('./outputdir/Krackan1_GMHUB_Diagnostics_Status_Tracker (4)_2024-03-25_08_28_57_test_runs.xlsx')
+sys.argv.append('./outputdir/Krackan1_GMHUB_Diagnostics_Status_Tracker (4)_Fixed_2024-03-26_06_57_53_test_runs.xlsx')
 
 sys.argv.append(False)
-sys.argv.append('842')
+sys.argv.append('0')
 
 # cmd line: python flatten.py --cyc_suite_tr ./outputdir/<file> False None/number
 
