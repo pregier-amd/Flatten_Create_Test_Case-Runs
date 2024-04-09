@@ -23,6 +23,9 @@ class Qtest(object):
       self.tc = ''
       self.tr = ''
       self.tl = ''
+      #Holds the Custom Field Data for Each type
+      # fields[test-russ] etc..
+      self.fields={}
       # request Re-try
       self.request_retry = 3
 
@@ -30,7 +33,7 @@ class Qtest(object):
           self.logger = self.log('qtest.log')
       else:
           self.logger = logger
-       
+
   def log(self,outfile): 
       logging.basicConfig(
                     filemode='w',
@@ -57,13 +60,15 @@ class Qtest(object):
         params['page_size'] = self.config['qtest']['page_size']
       outdata = {'items':[]}
       self.logger.info("post_request_all Body:" + str(body))
-
+      self.logger.info("Page:" + str(page) )
       while True:
           params['page'] = page
           data = self.request('post',endpoint,params,body,headers)
           #self.logger.info("data:" + str(data))
           if page % 5 == 0 :
              self.logger.info("Page:" + str(page))
+             
+
           if not 'items' in data or len(data['items']) == 0:
               #error or no data was sent.
               break
@@ -109,6 +114,48 @@ class Qtest(object):
            data = response
 
       return data
+
+
+  def get_fields(self,obj_type=None):
+      total = 0
+
+      # Endpoint examplehttps://amd.qtestnet.com/api/v3/projects/125506/settings/test-runs/fields
+      if obj_type not in list(self.data_cache.keys()):
+         # Pull the Existing Fields
+         if obj_type:
+             obj_type_list = [obj_type]
+         else:
+             obj_type_list = ['test-run','test-case','release', 'build', 'requirement', 'test-step', 'defect', 'test-suite']
+
+         # Pull all fields
+         for t in obj_type_list:
+             if not t in self.fields:
+                 endpoint = 'projects/' + str(self.proj_id) +  '/settings/' + t + 's' + "/fields" 
+                 response = self.request('get',endpoint,None,None,None)
+                 if isinstance(response,list):
+                     self.fields[t] = response
+                     cnt = len(self.fields[t])
+                     total = cnt + total
+                     self.logger.info("Total Fields: " + str(t) + " Total Cnt: " + str(total))
+                 else:
+                     self.fields[t] =[]
+                     self.logger.error("Error: Failed to get fields type: " + str(t) )
+
+      return self.fields
+
+  def lookup_fields(self,obj_type,label=None,id=None):
+    filt_obj =[]
+    # Find the Data for Label 
+    obj_data = self.get_fields(obj_type)
+    if label == 'planned_start':
+        field_label ='Planned Start Date'
+    if label == 'planned_end':
+        field_label ='Planned End Date'
+
+  
+
+    filt_obj = list(filter(lambda d: d['label'] == field_label ,obj_data[obj_type] ))
+    return filt_obj
 
   def get_project(self,projectname=None):
       data = self.get_request('projects')
@@ -202,11 +249,11 @@ class Qtest(object):
             tl = self.test_run_log(row)
 
 
-  def  reformat_datetime(self,date,informat='%Y-%m-%d %H:%M:%S',outformat='%Y-%m-%dT%H:%M:%S%z'):
+  def  reformat_datetime(self,date,informat='%Y-%m-%dT%H:%M:%S%z',outformat='%Y-%m-%dT%H:%M:%S%z'):
        d = self.eastern_tz.localize(datetime.strptime( str(date), informat )).strftime(outformat)
        return d 
-  def href(self,link,text):
-      return "<a href=\"" + link + "\"" + ">" + text + "<a>"
+  def href(self,link=None,text=None):
+      return "<a href=\"" + str(link) + "\"" + ">" + text + "<a>"
   def create_test_case(self,config,row,parent_id):
 
       # format the Body to create a test case
@@ -241,8 +288,7 @@ class Qtest(object):
       data = self.post_request(endpoint,None,body,None)
       return data
 
-  def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None):
-      create = True
+  def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None,properties_list=None,create=True):
 
       match obj_type:
           case 'test-cycle':
@@ -288,43 +334,65 @@ class Qtest(object):
           case 'test-run':
               endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-runs'
               params = {'parentId': parentId, 'parentType': 'test-suite'}
-              body = self.frmt_create_test_run(name,None)
 
-              for rq in range(1,self.request_retry):
-                while True:
-                    try:
-                        # do stuff
-                        data = self.get_request(endpoint,params,None,None)
-                        num_items = len(data['items'])
-                    except:
-                        self.logger.error("Request Did not return Items. Data: " + " Try: " + str(rq) + "/" + str(self.request_retry) + " Msg: " + str(data) )
-                        time.sleep(2)
-                        continue
-                    break
-              
-              # Create if missing
-              for i in data['items']:
-                  # break if cycle present
-                  if i['name'] == name:
-                      data = i
-                      create = False
-                      break
-              # name not matched create the Cycle
-              if create:
-                  self.logger.info("Create " + obj_type + " :" + str(name) + " Parent ID: " + str(parentId) + "TC: " + str(tc) )
-                  # name,parentId,description test case ID
-                  body = self.frmt_create_test_run(name,parentId,None, tc['id'])
-                  data = self.post_request(endpoint,params,body,None)                  
+              # Add Properties like:
+              # [{
+              #   "field_id": 12423268,
+              #   "field_name": "Planned End Date",
+              #   "field_value": "2023-06-30T00:00:00+00:00"
+              #  },
+              #  {
+              #   "field_id": 12423266,
+              #   "field_name": "Planned Start Date",
+              #   "field_value": "2023-01-01T00:00:00+00:00"
+              #  },
+              # ]
+              # name,parentId,description test case ID
+              description=None
+              properties = self.format_properties(properties_list,obj_type)
+              if(create):
+                  body = self.frmt_create_test_run(name,parentId,description,tc['id'],properties)
+                  # append the Planned Start and End Dates
+                  self.logger.debug("Create " + obj_type + " :" + str(name) + " Parent ID: " + str(parentId) + " TC: " + str(tc['name']) )
+                  self.logger.debug("Endpoint: " + str(endpoint)  )
+                  self.logger.debug("Parameters: " + str(params)  )
+                  self.logger.debug("Body: " + str(body) )
+                  data = self.post_request(endpoint,params,body,None)
+              else:
+                  data ={}
           case _:
-              pass
+              data ={}
       return data
- 
-  def frmt_create_test_run(self,name=None,parentId=None,description=None,tc_id=None):
+  def date_field_frmt(self,field=None,value=None):
+      outdata = {}
+      outdata['field_id']         = field['id']
+      outdata['field_name']       = field['label']
+      outdata['field_value']      = value
+      outdata['field_value_name'] = value
+      return outdata
+
+  def format_properties(self,data=None,obj_type=None):
+      outdata = []
+      for prop in data:
+          #Returns [{field}]
+          field= self.lookup_fields(obj_type,prop)
+          if len(field) > 0:
+              self.logger.info("Format_Properties[" + str(prop) +  "]:" + str(data[prop]))
+#              d = field['field_value']= data[prop]
+              d = self.date_field_frmt(field[0],data[prop])
+          else:
+              logging.info(obj_type + "[" + prop + "] is not supported")
+
+          # append the formatted fields into a list
+          outdata.append(d)
+      return outdata
+
+  def frmt_create_test_run(self,name=None,parentId=None,description=None,tc_id=None, properties={}):
       #  Id return an empty body
-      if not tc_id:
+      if not tc_id or not parentId or not name:
+          self.logger.error("Invalid TR data: " + " TCid:" + str(tc_id) + " ParentId:" + str(parentId) + " Name: " + str(name) )
           return {}
-      else:
-          self.logger.error("Invalid TC ID: " + str(tc_id) )
+
       body = {
                 "name": name,
                 "parentId": parentId,
@@ -334,7 +402,8 @@ class Qtest(object):
                 "order": 1,
                 "test_case": { 
                               "id": tc_id
-                              }
+                              },
+                "properties": properties
              }
       return body
   def frmt_create_test_suite(self,name=None,target_release_id=None,description=None):
@@ -451,14 +520,6 @@ class Qtest(object):
 #             "pid": "TR-2",
             "created_date": self.reformat_datetime( row['start_datetime'] ),   #"2023-07-31T14:43:06.183Z",
 #             "last_modified_date": row['' "2023-07-31T14:43:06.183Z",
-#              "properties": [
-#                {
-#                "field_id": 1,
-#                "field_name": "Field Name",
-#                "field_value": row['test case name'],
-#                "field_value_name": "1"
-#              }
-#             ],
             "test_case": {
             "id": testCaseId,
 #             "test_case_version_id": 11,
@@ -478,6 +539,31 @@ class Qtest(object):
         raise Exception("Exception: " + str(e) )
 
       logging.info ("WS : " + ws + " Created Test-Run: " + str(row['test case name'] ) )
+      return data
+  def test_run_log_flt(self,body=None,tr_id=None,create_enable=True):
+      if not create_enable:
+          return None
+#      ws = re.search(r'^\w+', row['Work Stream']).group()
+#      test_case = self.search(row['test case name'])
+       #testCaseId = i['id']
+          # test_case_version_id = i['test_case_version_id']
+
+      # create Test Run:
+      # Parent Test Suite: config[ws_test_suites][ws]
+      # Pass in: TC ID,
+      try:        
+        endpoint = 'projects/' + str(self.proj_id) + '/test-runs/' + str(tr_id) + '/test-logs/'
+        params = {'testRunId': str(tr_id) }
+        data = self.post_request(endpoint,params,body,None)
+        logging.info ("Created Test-Run-Log: " + str(data['id']) )
+        self.tl = data
+      except Exception as e:
+        logging.error("Exception: " + str(e) )
+        logging.info("Create Test Run Body Json: " + json.dumps(body) )
+        logging.info("Create Test Run parameters: " + str(params) )
+        logging.info("Create Test Run endpoint: " + str(endpoint) )
+        logging.error("End Exception:")
+        # raise Exception("Exception: " + str(e) )
       return data
   
   def test_run_log(self,row):
@@ -501,59 +587,113 @@ class Qtest(object):
          except Exception as e:
             raise Exception("Exception: " + str(e) )
          return data
+
+ 
   def frmt_status(self,status="passed"):
-      match status:
-          case 'pass':
-              data={"id": 601,
-                    "name": "Passed",
-                    "is_default": False,
-                    "color": "#0cdda8",
-                    "active": True}
-          case 'failed':
-              data={"id": 602,
-                    "name": "Failed",
-                    "is_default": False,
-                    "color": "#ddoca8",
-                    "active": True}
-      return data
-  def format_test_log(self,row):
-      # 
-      run_status = "passed"
-      for i in self.tc['test_steps']:
-          ts_id = i['id']
+      # got Supported Status: https://amd.qtestnet.com/api/v3/projects/130320/test-runs/execution-statuses
+      status_list = self.status_list()
+      status_clean = status.strip().lower()
+      # Waived or Skipped goes to Incomplete.
+      if(status_clean == 'waived'):
+          status_clean = 'incomplete'
+
+      if(status_clean == 'skipped'):
+          status_clean = 'blocked'
+
+      # use regex .*<sting>.* as the match pass matches Passed
+      pattern = r'.*'+ status_clean + '.*' 
+      data = list( filter(lambda d: re.match(pattern, d['name'].lower()) , status_list ) )
+      if len(data) != 1:
+          self.logger.error("Error Unsupported run log statatus: " + str(status) )
+          self.logger.error("Input Status resolved to: " + str(data) )
+          msg = "Supported Status List:"
+          for i in status_list:
+              msg = msg + i['name'] + ","
+          self.logger.info(msg)
+      # return first Status
+      return data[0]
+
+  def status_list(self):
+     # got Supported Status: https://amd.qtestnet.com/api/v3/projects/130320/test-runs/execution-statuses
+
+     data = [
+              {
+                "id": 601,
+                "name": "Passed",
+                "is_default": "false",
+                "color": "#0cdda8"
+              },
+              {
+                "id": 602,
+                "name": "Failed",
+                "is_default": "false",
+                "color": "#ff4259"
+              },
+              {
+                "id": 603,
+                "name": "Incomplete",
+                "is_default": "false",
+                "color": "#f0e68c"
+              },
+              {
+                "id": 604,
+                "name": "Blocked",
+                "is_default": "false",
+                "color": "#fdd300"
+
+              }
+            ]
+     return data
+
+
+
+  def format_test_log(self,row=None,run_status="passed",tc=None):
+      # 'start_datetime','end_datetime','test case name','runlog','run_status'
+      # status: "'passed','failed','incomplete','blocked'"
+      # Time formats: '%Y-%m-%d %H:%M:%S' Will be set to Eastern Local.
+      if 'run_status' in row:
+          run_status = row['run_status']
+      if not tc:
+          tc = self.tc
+      status_dict = self.frmt_status(run_status)
+
+      for step in tc['test_steps']:
+          ts_id = step['id']
+          ts_description = step['description']
+          ts_expected = step['expected']
       body ={
           "submittedBy": self.config['qtest']['creator_id'],
           "id": 1,
-          "test_case_version_id": self.tc['test_case_version_id'],
-          "exe_start_date": self.reformat_datetime(row['start_datetime']), #"2023-07-31T21:11:03.309Z",
-          "exe_end_date": self.reformat_datetime(row['end_datetime']),    #"2023-07-31T21:11:03.309Z",
-    #      "note": "Note",
+          "test_case_version_id": tc['test_case_version_id'],
+          "exe_start_date": row['start_datetime'],                     #eg. "2023-07-31T21:11:03.309Z",
+          "exe_end_date": row['end_datetime'],                         #eg. "2023-07-31T21:11:03.309Z",
           "name": row['test case name'],
-    #      "planned_exe_time": 0,
-    #      "actual_exe_time": 0,
-          "status": self.self.frmt_status(run_status),
+          "status": status_dict ,
           "result_number": 0,
           "test_step_logs": [
             {
               "test_step_id": ts_id,
               "test_step_log_id": 0,
               "user_id": self.config['qtest']['creator_id'],
-              "status": self.self.frmt_status(run_status),
-              "description": "CCX Workstream",
+              "status": status_dict,
+              "description": tc['description'], #"CCX Workstream",
               "expected_result": "No Fails, return Code of 0, and no Hardlocks, or timeouts. see log",
-              "actual_result": "See log: " + self.href(row['runlog'],"session log"),
+              "actual_result": "See log: " + self.href(row['runlog'],"execution log"),
               "order": 1,
               "group": 0,
               "test_step": {
                 "id": 1,
-                "description": "CCX Workstream",
-                "expected": "No Fails, return Code of 0, and no Hardlocks, or timeouts. see log",
+                "description": ts_description,
+                "expected": ts_expected,  #"No Fails, return Code of 0, and no Hardlocks, or timeouts. see log",
                 "order": 1,
                 "group": 0,
               },
               "parent_test_step_id": 0,
-              "exe_date": self.reformat_datetime(row['start_datetime'])
+              "exe_date": row['start_datetime']
             }
           ],
-        }
+      }
+      for k in ["planned_exe_time","actual_exe_time","note"]:
+          if k in row:
+               body[k] = row[k]
       return body

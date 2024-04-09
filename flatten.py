@@ -12,6 +12,7 @@ import urllib.parse
 import argparse
 from numbers import Number
 from dataclasses import dataclass
+import urllib.parse
 
 class Flatten(object):
   
@@ -30,6 +31,9 @@ class Flatten(object):
           self.logger = self.log(self.logfilename)
       else:
           self.logger = logger
+
+      import process_test_runs
+      self.ptr = process_test_runs.Process_Test_Runs(self.logger,None,self.dateTStr)
 
     def log(self,outfile): 
       logging.basicConfig(
@@ -236,15 +240,18 @@ class Flatten(object):
         data = data.to_dict('records')
         return data
 
-    def format_filename(self,inputfile,suffix='_flat' ):
+    def format_filename(self,inputfile,suffix='_flat',extension=None ):
         # inputfile = 'NV48_DCN_Diagnostics_IP_Status_Tracker.xlsm'
         # inputfile = 'Navi48_VCN_Diagnostics_Status_Tracker.xlsm'
         if not self.dateTStr:
             self.dateTime =  self.dateTimeString(self.dateTStr)
 
         filebase = os.path.splitext(inputfile)[0]
-        extension = os.path.splitext(inputfile)[1]
-        outfile = filebase + "_" + str(self.dateTStr) + suffix + extension
+        if not extension:
+            extension = os.path.splitext(inputfile)[1]
+        
+
+        outfile = filebase + "_" + str(self.dateTStr) + suffix + str(extension)
         return outfile
 
     def dateTimeString(self,dateTime=None):
@@ -367,48 +374,112 @@ class Flatten(object):
             else:
                 self.logger.error("Wrong Arguments: " + str(args))
                 return
-            # loop through the Input directoryu looking for Excel Files
+            # loop through the Input directory 
             if( not os.path.isdir(inputdir) ):
                 self.logger.info('Directory not Found: ' + str(inputdir) )
-                return 
-            # Read the Files in hte Directory.
-            for file in os.listdir(inputdir):
-                # look for Excel workbook
+                return
+            # Process List of Ip Trackers
+            self.process_ip_trackers(self,os.listdir(inputdir),inputdir,outputdir )
+
+    def txt_flat_cyc_suite_tr(self,args=None,outputdir=None,inputdir=None):
+        # next paramer is the project
+        if len(args) > 0:
+           ip_tracker_file  = args[0]
+        else:
+           self.logger.error("Wrong Arguments: " + str(args))
+           return
+
+        #  Put data into Single Directory
+        if not outputdir:
+            outputdir = os.path.dirname(ip_tracker_file)
+        if not inputdir:
+            inputdir = os.path.dirname(ip_tracker_file)
+        self.logger.info("Data Directories: " + "Inputdir: " + str(inputdir) + " Outputdir: " +  str(inputdir) )
+         
+        links = self.ptr.read_file(ip_tracker_file)
+        for link in links.splitlines():
+
+          #New Timestamp Per File:
+          self.dateTStr = self.dateTimeString(None)
+
+          filename = os.path.basename(link)
+          clean_filename  = urllib.parse.unquote(filename)
+
+          # Pull the Tracker down, Creates File unquoated removes %20
+          self.ptr.download_link(link,inputdir)
+
+          # Process List of Ip Trackers
+          self.process_ip_trackers([clean_filename],inputdir,outputdir,args )
+
+
+
+    def process_ip_trackers(self,filelist=[],inputdir='./inputdir',outputdir='./outputdir',args=[]):
+
+            # Loop through List of IP Trackers
+            for file in filelist:
+
+                # Process only Excel workbooks, skip .txt, etc..
                 if not re.search('.*\.x.*',file):
                     continue
                 
                 #inputfile = 'NV48_PMM_Diagnostics_IP_Status_Tracker.xlsm'
                 # file = 'Krackan1_CCX_Diagnostics_IP_Status_Tracker.xlsm'
                 full_file = inputdir + "/" + file
+                self.ip_tracker_filename = full_file
+
                 if( not os.path.isfile(full_file) ):
                     self.logger.info('File Not Found: ' + str(full_file) )
                     continue
 
-                outfile = self.format_filename(file)
+                # Do the Flattening
+                flat,test_runs,expanded = self.process_single_file(file,full_file,outputdir)
+                self.logger.info("Files Created: " + str(flat) + "," + str(test_runs) + "," + str(expanded))
 
-                self.logger.info('Input file: ' + str(full_file) + " Output File: " + outfile)
-                flat_outdata,test_run_list = self.flatten(full_file)
-
-                # Write the file _flat
-                # outfile = format_filename(file)
-                full_outfile = outputdir + "/" + outfile 
-                self.write_excel(full_outfile,flat_outdata)
-
-                # Write test_run_list _test_runs
-                outfile = self.format_filename(file,"_test_runs")
-                full_outfile = outputdir + "/" + outfile  
-                self.write_excel(full_outfile,test_run_list)
+                # Audit / Create Cyc,Test Runs
+                # Write over the txt file with list of links with Downloaded excel filename
+                # Utilize the test Run File.
+                # Save tracker File name to be used for Progress etc.
+                self.ptr.ip_tracker_basefilename = full_file
+                args[0] = self.format_filename(full_file,"_test_runs",'.xlsx')
+                self.ptr.cyc_suite_tr(args)
+                self.write_excel(self.full_flat_outfilename,self.ptr.expanded_data)
 
 
-                # Expand the Tes Case Id's _expanded
-                import process_test_runs
-                ptr = process_test_runs.Process_Test_Runs(self.logger,None,self.dateTStr)
-                # File Written in expand_flat
-                ptr.expand_flat_data(test_run_list, outputdir + "/" + file)
-    #            self.write_excel(full_outfile,test_run_list)
-            
+
+    def process_single_file(self,file,full_file,outputdir='./outputdir'):
+            # Read the Files in hte Directory.
+#            for file in os.listdir(inputdir):
+
+            # Add Time Stamp:
+            outfile = self.format_filename(file,'',".xlsx")
+
+            self.logger.info('Input file: ' + str(full_file) + " Output File: " + outfile)
+            flat_outdata,test_run_list = self.flatten(full_file)
+
+            # Write the file _flat
+            # outfile = format_filename(file)
+            self.full_flat_outfilename = outputdir + "/" + outfile 
+            self.write_excel(self.full_flat_outfilename,flat_outdata)
+
+            # Write test_run_list _test_runs
+            outfile = self.format_filename(file,"_test_runs",'.xlsx')
+            self.full_test_runs_filename = outputdir + "/" + outfile  
+            self.write_excel( self.full_test_runs_filename,test_run_list)
 
 
+            # Expand the Test Case Id's _expanded
+            #import process_test_runs
+            #ptr = process_test_runs.Process_Test_Runs(self.logger,None,self.dateTStr)
+            # File Written in expand_flat
+            self.full_expanded_filename = outputdir + "/" + file
+            self.ptr.expand_flat_data(test_run_list,self.full_expanded_filename)
+#            self.write_excel(full_outfile,test_run_list)
+            #Return The 3 Versions of the Data:
+            # Flat is the diags Raw Data with Ranges in test Cases:
+            # Test_runs - Used to Create Test Cases, and Requirements using Ruby.. FIX ??
+            # Expanded - Flat plus Test Case Ranges Expanded.
+            return self.full_flat_outfilename,self.full_test_runs_filename,self.full_expanded_filename
+     
 
     def combine_req_ip(self,args=[],outdata={}):
         if len(args) == 3:
@@ -530,26 +601,36 @@ class Flatten(object):
 
     def cyc_suite_tr(self,data):
         #Call class to Create the Cycles, Test Suites, and Test Runs as needed
-        import process_test_runs
-        ptr= process_test_runs.Process_Test_Runs(self.logger)
+        #import process_test_runs
+        #ptr= process_test_runs.Process_Test_Runs(self.logger)
         #ptr.init_parameters(data)
-        ptr.cyc_suite_tr(data)
+        self.ptr.cyc_suite_tr(data)
 
-
+    def txt_cyc_suite_tr(self,data):
+        #Call class to Create the Cycles, Test Suites, and Test Runs as needed
+        #import process_test_runs
+        #ptr= process_test_runs.Process_Test_Runs(self.logger)
+        #ptr.init_parameters(data)
+        self.ptr.txt_cyc_suite_tr(data)
 
     def main(self,args):
     
         data =None
         if args.flatdir:
             self.flatdir(args.flatdir)
+
         if args.flatfile:
             self.logger.info('Not Supported option: ' + '--flatfile' )
             pass
+
         if args.combine:
             data = self.combine_req_ip(args.combine)
+
         if args.cyc_suite_tr:
             data = self.cyc_suite_tr(args.cyc_suite_tr)
 
+        if args.txt_flat_cyc_suite_tr:
+            data = self.txt_flat_cyc_suite_tr(args.txt_flat_cyc_suite_tr)
    
         return data
 
@@ -564,6 +645,7 @@ parser.add_argument('-fltf', '--flatfile', nargs='*', type=str, help='Excel File
 parser.add_argument('-cmb', '--combine', nargs=3, type=str, help='Excel Request Excel <requestfilename>  <Flat inputfilename> <output file>') 
 #input is a cut down diags_raw_data Sheet. Supports Pre-silicon and Post Silicon Rus for same Test Cases.
 parser.add_argument('-ctr', '--cyc_suite_tr', nargs=3, type=str, help='Excel <test runs excel> <exec True/[False]> <skip to expanded line number>') 
+parser.add_argument('-txt_fctr', '--txt_flat_cyc_suite_tr', nargs=3, type=str, help='<link file.txt> <exec True/[False]> <skip to expanded line number>') 
 
 # combine_req_ip
 
@@ -575,11 +657,20 @@ parser.add_argument('-ctr', '--cyc_suite_tr', nargs=3, type=str, help='Excel <te
 
 #cmd line: python flatten.py --flatdir ./inputdir
 
-sys.argv.append('--cyc_suite_tr')
-sys.argv.append('./outputdir/Krackan1_GMHUB_Diagnostics_Status_Tracker (4)_Fixed_2024-03-26_06_57_53_test_runs.xlsx')
+# sys.argv.append('--cyc_suite_tr')
+#sys.argv.append('./outputdir/Krackan1_GMHUB_Diagnostics_Status_Tracker (4)_Fixed_2024-03-26_06_57_53_test_runs.xlsx')
+#sys.argv.append(False)
+#sys.argv.append('0')
 
+
+sys.argv.append('--txt_flat_cyc_suite_tr')
+sys.argv.append('./NV48/NV48_iptracker_single.txt')
 sys.argv.append(False)
 sys.argv.append('0')
+
+
+
+
 
 # cmd line: python flatten.py --cyc_suite_tr ./outputdir/<file> False None/number
 

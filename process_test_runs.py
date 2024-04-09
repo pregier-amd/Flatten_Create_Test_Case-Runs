@@ -1,6 +1,7 @@
 from concurrent.futures.process import _ResultItem
 from dataclasses import dataclass
 import dataclasses
+from ipaddress import v4_int_to_packed
 import re
 import sys,os
 from telnetlib import IP
@@ -18,6 +19,14 @@ import pytz
 # qtest class
 import qtest
 import configparser
+import json
+from datetime import datetime, timedelta
+from datetime import date # Set Timezone
+import pytz
+import subprocess
+import time
+import urllib.parse
+import yaml
 
 class Process_Test_Runs(object):
   def __init__(self,logger = None, config =None, dateTStr=None ):
@@ -35,7 +44,11 @@ class Process_Test_Runs(object):
           self.logger = self.log('process_test_runs.log')
       else:
           self.logger = logger
-      
+      # No Date, just Base Input IP trcker Name
+      # Use it for Progress tracking
+      self.ip_tracker_basefilename = None
+      self.audit ={}
+      self.test_run_log = {}
       self.init_qtest()
       pass
   def log(self,outfile): 
@@ -63,36 +76,49 @@ class Process_Test_Runs(object):
 
       # Test Case Class Variable
       # Dictionary of the tc = test Cases, tr=test_runs: { name:{data}, name2:{data}...}
-      self.tc =[]
-      self.tr =[]
+      self.tcases =[]
+      self.truns =[]
 
   def find_tc(self,name=None,id=None):
 
       # Check the List of already used test Cases.
-      results = self.lookup_data(self.tc,'test-cases',name)
+      results = self.lookup_data(self.tcases,'test-cases',name)
       if not results:
-             results = []
+             results = {}
       return results
  
   
-  def get_obj_all(self,name=None, body=None,obj_data={},obj_type='test-cases'):  
+  def get_obj_all(self,name=None, body=None,obj_data=[],obj_type='test-cases'):  
       #use Web AI and get dat from qTest.
       if not name:
           # pull in all Test Cases
           name = '%'  
+
+      #'test_case_version_id'
+      #'test_steps'
+      fields = ["name","id","pid","parentId"]
+
       if not body:
-          body={
-                 "object_type": obj_type ,
-                 "fields": ["name","id","pid","parentId"],
-                 "query": "'name' ~ " + str(name)
-                }
+          match obj_type:
+              case 'test-cases':
+                fields.append('version')
+                fields.append('test_case_version_id')
+                fields.append('description')
+                fields.append('test_steps')
+
+      body={
+            "object_type": obj_type ,
+            "fields": fields,
+            "query": "'name' ~ " + str(name)
+           }
       # on error return the data.
-#      data = self.qt.search_body(body, obj_type='test-cases')
+#     data = self.qt.search_body(body, obj_type='test-cases')
       data = self.qt.search_body_all(body, obj_type)
 
       results = self.store_obj_data(data,obj_data)
       self.logger.info("Get All " + str(obj_type) + " Cnt:" + str(len(obj_data)))
-      return results
+      return obj_data
+#      return results
      
   def store_obj_data(self,indata={},obj_data={}):
       results = None
@@ -109,7 +135,8 @@ class Process_Test_Runs(object):
               # On success returns last data type{'id':xxx,'name':xxx}
       else:
           self.error = indata 
-          results = {}
+          self.logger.info("store_object no data:")
+          results = []
       return results
 
   def lookup_data(self,obj_data=None,obj_type='test-cases',name=None,parentid=None):
@@ -117,17 +144,40 @@ class Process_Test_Runs(object):
       # Pull all test Cases from qTest all test Cases:
       results = {}
 
-      if not obj_data :
+      if len(obj_data) == 0:
         # get_tc_all( name, body, self.tc,obj_type='test-cases')
-        results = self.get_obj_all( None, None, obj_data , obj_type)
+        directory = os.path.dirname(self.ip_tracker_basefilename)
+        filename = directory + "/" + obj_type + ".yml"
+        # if the Data has been read us the data.
+        if os.path.isfile(filename):
+            self.logger.info("Restoring data in File: " + filename)
+            obj_data = self.read_file(filename)
+            if obj_type == 'test-cases':
+               self.tcases = obj_data
+            if obj_type == 'test-runs':
+               self.truns = obj_data
+        else: 
+            obj_data = self.get_obj_all( None, None, obj_data , obj_type)
+            self.logger.info("Saving Data to File: " + filename)
+            self.write_yaml_file(filename,obj_data)
 
+        # self.write_excel("Exception_debug.xlsx",obj_data)
       #  template for using filter list(filter(lambda d: d['type'] in keyValList, exampleSet))
       if not parentid:
           filt_obj = list(filter(lambda d: d['name'] == name ,obj_data ))
       else: 
-          # use paraent ID 
-          filt_obj = list(filter(lambda d: d['name'] == name and d['parentId'] == parentid ,obj_data ))
-      self.logger.info("Filtered Dict:" + str(filt_obj))
+          # use parent ID 
+          try:
+             filt_obj = list(filter(lambda d: d['name'] == name and d['parentId'] == parentid ,obj_data ))
+          except Exception as e:
+              self.logger.error("Filter Error: " + str(e) )
+              self.logger.error("Filter Error: " + str(obj_type) + " name: " + name + " Parent ID: " + str(parentid) )
+              self.write_excel("Exception_debug.xlsx",obj_data)
+              raise
+
+
+      for ob in filt_obj:
+         self.logger.info("Filtered Dict:" + str(ob['name']) + " ID: " + str(ob['id']) )
 
       # use last Matching Name
       for i in filt_obj:
@@ -162,6 +212,7 @@ class Process_Test_Runs(object):
         logging.error('Failed to Write Excel File: ' + str(e))
         raise
   def expand_flat_data(self,data=None,filename=None):
+      
       # read Args and pull the Input filename.
       exp_filename =  self.append_suffix(filename,'expanded')
 
@@ -170,31 +221,93 @@ class Process_Test_Runs(object):
       self.expanded_data =  self.process_exec_data_expand(data,exp_filename)
       return self.expanded_data
 
-  def cyc_suite_tr(self,data):
+  def txt_flat_cyc_suite_tr(self,indata):
 
-      self.first_expanded_row = 0
+      links = self.read_file(indata[0])
+      #links = ['https://myworktor.amd.com/sites/DiagnosticDomain/Shared%20Documents/Programs/NV48/Common/IP%20Status%20Tracker/Navi48_DF_Diagnostics_Status_Tracker.xlsm']
+
+      # Download Data to the Same Dir as the *.txt 
+      path = os.path.dirname(indata[0])
+
+      for link in links.splitlines():
+          filename = os.path.basename(link)
+          clean_filename  = urllib.parse.unquote(filename)
+
+          # reads _flat data
+          links = self.download_file(link,path) 
+
+          # Perform the Create/Find Cycle,Suite,Tr, Tl
+          filename = directory + clean_filename
+
+          # pass on the Specific Filename name from the link
+          indata[0] = filename
+          self.cyc_suite_tr(indata)
+
+  def download_link(self,link,target_directory=None):
+
+      # https:/// to Conflunece Sharepoint. IP tracker  Location
+       filename = os.path.basename(link)
+       clean_filename  = urllib.parse.unquote(filename)
+
+       # Create local Filename using Directory
+       filename = target_directory + clean_filename
+
+       # Pull the Data. Return Status:
+       result = self.download_file(link, target_directory) 
+       return result
+            
+
+  def cyc_suite_tr(self,data):
       if len(data) == 3:
          self.first_expanded_row = int(data[2])
+
+      self.qt.lookup_fields('test-run','planned_start',None)
+
+
 
       # read Args and pull the Input filename.
       # reads _flat data
       flat_data,filename = self.init_parameters(data)
+
+      # Perform the Create/Find Cycle,Suite,Tr, Tl
+      self.process_cyc_suite_tr(flat_data,filename)
+
+  def process_cyc_suite_tr(self,flat_data,filename):
+      self.first_expanded_row = 0
+
+      #Class Variable for input File
+      self.argsfilename = filename
 
       # expand the Flat Data
       self.expanded_data = self.expand_flat_data(flat_data,filename)
 
       # Process exec_data
       # Expand the Test Case ID's write to  "*expanded"
-      self.process_exec_data_after_expanded(self.expanded_data)
+      self.process_exec_data_after_expanded(self.expanded_data,filename)
+
+      # write_audited Expanded Data.
+      self.write_excel(filename,self.expanded_data)
+      
       return 
 
-  def append_suffix(self,inputfile=None,suffix=None,extension=".xlsx"):
-      filebase = os.path.splitext(inputfile)[0]
+  def append_suffix(self,inputfile=None,suffix=None,extension=".xlsx",addtime=True):
+      self.filebase = os.path.splitext(inputfile)[0]
+
+      # Append Date time String.
+      if addtime:
+          time_string = self.get_timestring()
+          outfile = self.filebase + "_" + str(self.dateTStr) + "_" + suffix + extension
+      else:
+          outfile = self.filebase + "_" + suffix + extension
+
+      return outfile
+
+  def get_timestring(self):
+
       if not self.dateTStr:
           now = datetime.now()
           self.dateTStr = now.strftime("%Y-%m-%d_%H_%M_%S")
-      outfile = filebase + "_" + str(self.dateTStr) + "_" + suffix + extension
-      return outfile
+      return self.dateTStr
 
   def init_parameters(self,data):
       # filename = data[0],exec_tr = data[2]
@@ -234,7 +347,28 @@ class Process_Test_Runs(object):
       self.logger.info("input Row Cnt: " + str(l) + " Test Run List: " + str( len(exp_data) ) )
       return exp_data
 
-  def process_exec_data_after_expanded(self,data):
+  def get_progress(self,prog_filename=None):
+      # If starting at row 0 check for a Progress File
+      if self.first_expanded_row == 0:
+          progress  = self.read_file(prog_filename)
+          # Use the number
+          if progress:
+              self.first_expanded_row = int(progress)
+              self.logger.info("Start On Expanded Row: " + str(self.first_expanded_row))
+
+      return self.first_expanded_row
+
+
+
+  def process_exec_data_after_expanded(self,data,filename=None):
+      # Progress File:  <filename>, text file, do not add Timestamp.
+      # Add _ Progress Suffix with no Date time. (False Flag passed.)
+      self.prog_filename = self.append_suffix(self.ip_tracker_basefilename,"progress",".txt",False)
+      if os.path.isfile(self.prog_filename):
+          self.first_expanded_row = self.get_progress( self.prog_filename)
+      else:
+          self.first_expanded_row = 0
+
       # For each of the Rows 
       cnt = 0
       variations = 0
@@ -244,14 +378,96 @@ class Process_Test_Runs(object):
               cnt = cnt+1
               continue
 
+          
+          # Debug
+          #planned = self.config['dates']['pre_silicon_planned']
+          #planned_str = datetime.strftime(self.format_eta(planned,"wk2"),"%Y-%m-%dT%H:%M:%S%z")
+          #print(planned_str)
+
+          #Debug
+          # End of debug
           #    Pre-Silicon and Post Silicon Entry Puts these in Different Releases.
           # Get the Current create / get test_cycle Name is IP
           # Get the Current create / get test_suite  Name is in row['Sub-IP Block']
           self.create_qtest_entries(row,cnt)
 
+          # Write to Progress File contains just the Row number
+          #Skip rows less than or eaqual to file value.
+          self.save_progress( self.prog_filename,cnt)
+
           cnt = cnt+1
           variations = variations + int(row['Total Variations'])
-          self.logger.info("Row: " + str(cnt) + " Test Case: " + str(row['Test Case ID']) + ' Total Variations: ' + str(variations) )
+          self.logger.info("Row: " + str(cnt) + " Test Case: " + str(row['Test Case ID']) + ' Total Variations: ' + str(variations) ) 
+
+  def write_yaml_file(self,filename=None,data=None,mode='w'):
+      if not filename or not data:
+          self.logger.error("write_file invalid Filename or data" + " Filename: " + str(filename)  )
+          return None
+      # Write to file  
+      with open(filename, mode) as f:
+          yaml.dump(data,f,default_flow_style=False)
+          
+    
+  def write_txt_file(self,filename=None,data=None,mode='w'):
+      if not filename or not data:
+          self.logger.error("write_file invalid Filename or data" + " Filename: " + str(filename)  )
+          return None
+      # Write to file
+      if not isinstance(data,str):
+          data = str(data)
+      f = open(filename, mode)
+      f.write(data) 
+        # python will convert \n to os.linesep
+      f.close()
+
+  def read_file(self,filename=None,sh="sheet",skip=None):
+      if not filename:
+        self.logger.error("read_file invalid Filename:" + " Filename: " + str(filename)  )
+        return None
+      
+      # Text File Read
+      extension = os.path.splitext(filename)[1]
+      if not os.path.isfile(filename):
+         self.logger.info("File Does not Exist: " + str(filename) )
+         return None
+      # Support Multiple File typoes
+      match extension:
+        case '.txt': 
+            # Read the file
+            f = open(filename, 'r')
+            data = f.readline()
+            f.close()
+            return data
+
+        case '.yml':
+            # Read the file
+            with open(filename, 'r') as f:
+                data = yaml.safe_load(f)
+            return data
+        case  '.xlsm':
+            return self.read_excel(filename,sh,skip)
+        case "_":
+                self.logger.info("File type Not Supported: " + str(filename) )
+      return data
+
+  def download_file(self,link=None, directory=None):
+      filename = os.path.basename(link)
+      filename  = urllib.parse.unquote(filename)
+      cmd = 'cd ' + directory + "&" + 'curl --ntlm -u ' + self.config['creds']['user'] + ":" + self.config['creds']['password'] + " -o " + "\"" + filename + "\""
+      cmd = cmd + " " + link
+
+      path = os.path.dirname(__file__)
+      cmd = cmd + "& cd " + path
+      self.logger.info("download_file: " + str(cmd) + "\n")
+
+      # data = subprocess.check_output(['cd' , directory,";", cmd,";","cd .."])
+      result = subprocess.getoutput(cmd)
+
+      return result
+
+  def save_progress(self,filename=None,data=None):
+      # Save Progress 
+      return self.write_txt_file(filename,data)
 
   def NA_expand_tc_range(self,data):
       outdata = []
@@ -374,20 +590,45 @@ class Process_Test_Runs(object):
         row_cp['Total Variations'] = 1
 
         # Pre-Silicon
-        # if expansion < # written = 1
+        # if expansion cnt <= value set output to 1
         # wrote 3 , 1,2,3 enter 1 for 4,5,..Max enter 0
-        row_cp['# Written'] = self.ls_eq(cnt,row['# Written'] )
+        for i in ['# Written','# of Planned Pre-Si Test Cases','Total Run','Total Run.1']:
+            row_cp[i]= self.ls_eq(cnt,row[i] )
 
-        # Planned for Pre-Silion cnt <= max 
-        # fail = 1 if cnt >= pass fail cnt
-        fail_int = self.to_int(row['Fail'])
-        pass_int = self.to_int(row['Pass'])
-        ls_eq_list_pre =['# of Planned Pre-Si Test Cases','Pass','Fail','Skip','Total Run']
-        for i in ls_eq_list_pre:
-            max_v = self.to_int(str(row[i]))
-            row_cp[i]= self.ls_eq(cnt,int(max_v) ) 
+        # Decrement Pass to 0 then Decrement Fail to 0, then Waive, then Skip.
+        # row['Pass']  = 1 if (cnt > total ) && cnt <= 0 + pass
+        # total = total + pass
+        # row['Fail']  = 1 if (cnt > total && cnt <= (total + fail) )
+        # total = total + fail
+        # row['Waive'] = 1 if (cnt > total  && cnt <= (total + waive) )
+        # total = total + waive
+        # row['Skipped'] = 1 if (cnt > total  && cnt <= (total + skipped) )
+        for i in ['# of Planned Pre-Si Test Cases','Total Run','Total Run.1']:
+            # 1 Cnt per row, until cnt is >= inital Value
+            row_cp[i] = self.ls_eq(cnt,self.to_int(str(row[i])) )
 
-        row_cp['Fail'] = self.gr_eq(cnt,int(pass_int + fail_int) )
+        # Scale the Pre-silicon Counts.
+        row_cp = self.scale_cnts(cnt,row,row_cp,['Pass','Fail','Waived','Skip'])
+
+        # Scale the Post-silicon Counts.               
+        row_cp = self.scale_cnts(cnt,row,row_cp,['Pass.1','Fail.1','Waived.1','Skip.1'])
+
+
+
+        #fail_int = self.to_int(row['Fail'])
+        #pass_int = self.to_int(row['Pass'])
+
+        #total_run = self.to_int(str(row['Total Run']))
+
+        #ls_eq_list_pre =['# of Planned Pre-Si Test Cases','Pass','Fail','Waive','Skip']
+        #for i in ls_eq_list_pre:
+            #max_v = self.to_int(str(row[i]))
+            # Rolling total  Pass + Fail + Waive + Skip
+            #total = total + max_v
+            #row_cp[i]= self.ls_eq(cnt,int(max_v) ) 
+
+#        row_cp['Fail'] = self.gr_eq(cnt,int(pass_int + fail_int) )
+  #      row_cp['Fail'] = self.gr_eq(cnt,int(fail_int), )
 
         # Post-Silicon
         # if expansion < # written = 1
@@ -395,15 +636,39 @@ class Process_Test_Runs(object):
         
         # Planned for Pre-Silion cnt <= max 
         # fail = 1 if cnt >= pass fail cnt
-        fail_int = self.to_int(row['Fail.1'])
-        pass_int = self.to_int(row['Pass.1'])
-        ls_eq_list_pre =['Pass.1','Fail.1','Skip.1','Total Run.1']
-        for i in ls_eq_list_pre:
-            max_v = self.to_int(str(row[i]))
-            row_cp[i]= self.ls_eq(cnt,int(max_v) ) 
+   
+   #fail_int = self.to_int(row['Fail.1'])
+   #     pass_int = self.to_int(row['Pass.1'])
+   #     ls_eq_list_pre =['Pass.1','Fail.1','Skip.1','Total Run.1']
+   #     for i in ls_eq_list_pre:
+   #         max_v = self.to_int(str(row[i]))
+   #         row_cp[i]= self.ls_eq(cnt,int(max_v) ) 
 
-        row_cp['Fail'] = self.gr_eq(cnt,int(pass_int + fail_int) )
+    #    row_cp['Fail.1'] = self.gr_eq(cnt,int(pass_int + fail_int) )
         return row_cp
+  def scale_cnts(self,cnt=None,row=None,row_cp=None,col_list=None):
+        # col_list  Example: ['Pass','Fail','Waive','Skip']
+        #cnt is 1 based
+        # Decrement Pass to 0 then Decrement Fail to 0, then Waive, then Skip.
+        # row['Pass']  = 1 if (cnt > total ) && cnt <= 0 + pass
+        # total = total + pass
+        # row['Fail']  = 1 if (cnt > total && cnt <= (total + fail) )
+        # total = total + fail
+        # row['Waive'] = 1 if (cnt > total  && cnt <= (total + waive) )
+        # total = total + waive
+        # row['Skipped'] = 1 if (cnt > total  && cnt <= (total + skipped) )
+        total = 0
+        for i in col_list:
+            # walks through ['Pass','Fail','Waived','Skip']
+            value = self.to_int(str(row[i]))
+            # 
+            row_cp[i] = self.grt(cnt,int(total) ) and self.ls_eq(cnt,total + value)  
+
+            # Rolling total  Pass + Fail + Waive + Skip
+            total = total + value
+        return row_cp
+
+
 
 
   def ls_eq(self,cnt,max):
@@ -421,6 +686,16 @@ class Process_Test_Runs(object):
 
         # returns 1 for <= Max 
         if cnt >= max:
+            data = 1
+        else:
+            data = 0
+        return data
+
+  def grt(self,cnt,max):
+        max = self.to_int(max)
+
+        # returns 1 for <= Max 
+        if cnt > max:
             data = 1
         else:
             data = 0
@@ -475,10 +750,15 @@ class Process_Test_Runs(object):
           #Pre-silicon Test
           if ( self.to_int(row['# of Planned Pre-Si Test Cases']) > 0 and self.to_int(row['Total Variations']) > 0 ):
              enabled = True
+          else:
+             self.enable_tr_msg = "Not Planned"
+
       else:
           # Confirm that there is a Varaiation to run.
           if ( self.to_int(row['Total Variations']) > 0 ):
              enabled = True
+          else:
+             self.enable_tr_msg = "No Variations"
       self.logger.info("enabled_tr: " + str(enabled) )
       return enabled
 
@@ -527,27 +807,259 @@ class Process_Test_Runs(object):
         # enabled to Be entered in the Pre/Post Release
         parent = self.ts
 
-        if( self.enabled_tr(pre_flag,row) ):
-            #             
-            tc = self.find_tc(row['Test Case ID'])
-            self.logger.info("For tr Name: "+ tr_name +" Use Test Case: " + str(tc) )
-            if not tc:
-                # No Test Case:
-                return None
-            # Test Case Available: Find or Create a Test Run
+        # check for Test Case            
+        self.tc = self.find_tc(row['Test Case ID'])
+        if not self.tc:
+            # No Test Case:
+            self.logger.error("No Test Case for tr Name: " + tr_name )
+            self.tc['name'] = "Not Found"
+            self.test_run ={}
+            self.test_run_log ={}
+            self.update_audit(row,pre_flag)
+            return None
 
-            # if a Test Case Has been Found Create the Test Run:
-            # test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)
-            #qtest_dict[] not used
-            test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)                                
-            self.logger.info("TR Row: " + str(cnt) + "\tRL: " + str(release) + "\tCL: " + str(cycle) + "\tTS: " + str(suite) + "\tTR: " + str(tr_name) +" TR: " + str(test_run['name'] ) )
+        # Check if the Test Run should be created I.e. if  "# Planned for Pre silicon" == 1/0             
+        if( not self.enabled_tr(pre_flag,row) ):
+
+            # Not PLanned for Pre silion and Pre_flag == true
+            self.test_run ={}
+            self.test_run['name'] = self.enable_tr_msg 
+            self.test_run_log ={}
+            self.update_audit(row,pre_flag)
+            return None
+
+        self.logger.info("For tr Name: "+ tr_name +" Use Test Case: " + str(self.tc['name']) )
+
+        # if a Test Case Has been Found Create the Test Run:
+        # test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)
+        #qtest_dict[] not used
+        if pre_flag:
+           planned = self.config['dates']['pre_silicon_planned']
+           # Pre Silicon do not use the ETA column
+           planned_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z") 
+        else:
+           planned = self.config['dates']['post_week1']
+           # Eta WK * 7 days Use the ETA Column for the PLanned Information
+           planned_str = datetime.strftime(self.format_eta(planned,row['ETA']),"%Y-%m-%dT%H:%M:%S%z") 
+
+        # For Test Run Planning Dates.
+        properties={}
+        properties["planned_start"] = planned_str
+        properties["planned_end"]   = planned_str
+
+        self.test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,self.tc,properties)                                
+        self.logger.info("TR Row: " + str(cnt) + "\tRL: " + str(release) + "\tCL: " + str(cycle) + "\tTS: " + str(suite) + "\tTR: " + str(tr_name)  + " Properties: " + str(properties) )
+        self.logger.info("Test Case: " + str(self.tc['id']) )
+
+        # use the Test Run:
+        # Pull the Start Time from Config.
+        # Format the Test Log
+        # Format Test Log
+        # Set the Parameters in the test Log from the Excel Shet.     
+
+
+        # Check if there is a Run to Create:
+        #  If ip_tracker_status = None , do not create Run Log
+        if not self.ip_tracker_status(row,pre_flag):
+            self.test_run_log =[]
+            self.update_audit(row,pre_flag)
+            return 
+
+
         # If true Create a Run Log
-        if config['qtest'].getboolean('create_test_log_flag'):
-            # use the Test Run:
+#        if not self.config['qtest'].getboolean('create_test_log_flag'):
+ #           return None
 
-            
+        # Run the Instance at the Planned Date, IP Tracker input.
+        #Add 1 Week to Planned Date
+        date_dict = {}
+        date_dict['start_datetime'] = datetime.strftime(self.format_eta(planned_str,"wk1"),"%Y-%m-%dT%H:%M:%S%z")  #  self.format_eta(planned_str,'wk1') 
+        date_dict['end_datetime']   = date_dict['start_datetime'] 
 
+        self.tc = self.tcase_approved(self.tc)
+        tl_row                = self.format_run_log(row,pre_flag,self.tc,None,date_dict)
 
+        # Create Run Log
+        if self.config['qtest']['create_test_log_flag'] == "True":
+            create_enable = True
+        else:
+            create_enable = False
+
+        if 'id' in self.test_run:
+            self.test_run_log = self.qt.test_run_log_flt(tl_row,self.test_run['id'],create_enable)
+
+        self.update_audit(row,pre_flag)
+
+  def tcase_approved(self,tc=None):
+      if not "version" in tc:
+          self.logger.info("No \"version\" in TC:" + str(tc) )
+          return tc
+      # If version is not Approved I.E 1.0, 2.0  etc ..  Approve it.
+      m = re.match(r'.*\.0.*',str(tc["version"]) )
+      if not m :
+          data = self.qt.approve_tc(tc["id"])
+          if data:
+              for k in ['version','test_case_version_id']:
+                self.logger.info("TC: "+ str(tc['id']) + ", Approved["+ k +"]:" + str(data[k]) )
+                tc[k] = data[k]
+      return tc
+
+  def update_audit(self,row,pre_flag=False):
+       audit={}
+       audit_pre_post={}
+
+       # Add Test Release, Tsuite, Tcycle, Tcase, Trun , TLog, Test Executed 
+       audit['Tcyclename']            = self.check_key(self.cl,'name')      
+       audit['Tcycleid']              = self.check_key(self.cl,'id')      
+       audit['Tsuitename']            = self.check_key(self.ts,'name')        
+       audit['Tsuiteid']              = self.check_key(self.ts,'id')        
+       audit['Tcasename']             = self.check_key(self.tc,'name')
+       audit['Tcaseid']               = self.check_key(self.tc,'id')
+
+       audit_pre_post['Trelid']       = self.check_key(self.rl,'id')
+       audit_pre_post['Trelname']     = self.check_key(self.rl,'name')
+       audit_pre_post['Trun']         = self.check_key(self.test_run,'id')   
+       audit_pre_post['Logid']        = self.check_key(self.test_run_log,'id')
+       audit_pre_post['Log_status']   = self.check_key(self.audit, 'status')
+       audit_pre_post['Exec_Start_Time'] = self.check_key(self.audit,'start_datetime')
+       audit_pre_post['Exec_End_Time'] = self.check_key(self.audit,'end_datetime')
+
+       for i in audit:
+          if audit[i]:
+            row[i] = audit[i]
+
+       for i in audit_pre_post:
+          # Record the Data under Appropriate Releas
+          if pre_flag:
+                out_key = 'Pre_' + i
+          else:
+                out_key = 'Post_' + i
+
+          #Save the data
+          row[out_key] = audit_pre_post[i]
+
+  def check_key(self,data={},key=None):
+      result = None
+   
+      if isinstance(data,dict):
+          if key in data:
+             result = data[key]
+
+      return result
+
+  def format_run_log(self,row=None,pre_flag=None,tc=None,runlog=None,date_dict=None):
+      # format_test_log(self,row=None,run_status="passed"):
+      # 'start_datetime','end_datetime','test case name','runlog','run_status'
+      # Status: "'passed','failed','incomplete','blocked'"
+      # Time formats: '%Y-%m-%d %H:%M:%S' Will be set to Eastern Local.
+      basedate = datetime.now()
+      now = datetime.strftime(basedate, "%Y-%m-%dT%H:%M:%S")
+      outrow = {}
+      outrow['runlog'] ="https://Execution/*.log"
+      # True == Presilicon
+      if pre_flag:
+          planned = self.config['dates']['pre_silicon_planned']
+      else:
+          planned = self.config['dates']['post_week1']
+          # week1 + Eta WK * 7 days
+
+      outrow["planned_exe_time"]   = 1
+      
+      # Current Date Time Of execution
+      for k in ['start_datetime','end_datetime']:
+          if k in date_dict:
+#           outrow[k] = self.qt.reformat_datetime(row[k],informat='%Y-%m-%d %H:%M:%S',outformat='%Y-%m-%dT%H:%M:%S%z')+ 
+            outrow[k] = date_dict[k]
+            # Save the Execution Dates
+            self.audit[k] = outrow[k]
+          else:
+            # reformat template =self.qt.reformat_datetime(self.config['qtest']['executed_on'],informat='%Y-%m-%d %H:%M:%S',outformat='%Y-%m-%d %H:%M:%S%z')
+             #No Time Presented use Now.
+             outrow[k] = now
+             
+      # Test Case Name   
+      outrow['test case name'] = tc['name']
+      outrow['runlog']         = runlog
+
+      outrow['run_status'] = self.ip_tracker_status(row,pre_flag)
+      self.audit['status'] = outrow['run_status']
+      d ={**outrow, **row}
+      body = self.qt.format_test_log(d,None,tc)
+      return body
+  def ip_tracker_status(self,row=None,pre_flag=None):
+      # Select the Pre / Post silicon Columns 
+      pre_columns = json.loads( self.config['iptracker']['pre_status_columns'] )
+      post_columns = json.loads( self.config['iptracker']['post_status_columns'] )
+      if pre_flag:
+          data = self.row_to_status(row,pre_columns)
+      else:
+          data = self.row_to_status(row,post_columns)
+
+      return data
+  def clean_status(self,row=None,key=None):
+      if key in row:
+          if isinstance(row[key],str):
+              val = 0
+          else:
+              val = row[key]
+      else:
+         self.logger.error("Status Key Error, Key:" + key + "Not in Row:")
+         val = 0
+      return val
+ 
+  def row_to_status(self,row={},col={} ):
+      # If no Runs Return
+      if not self.clean_status(row,col['runs']) > 0:
+         return None
+      outdata = None
+
+      # Check for Pass:
+      #row[col['pass']] > 0:
+      if self.clean_status(row,col['pass']) > 0: 
+         outdata = "pass"
+      else:
+          #if row[col['fail']] > 0:
+          if self.clean_status(row,col['fail']) > 0:       
+            outdata = "fail"
+          else:           
+            # if row[col['waive']] > 0:
+            if self.clean_status(row,col['waive']) > 0: 
+               outdata = "incomplete"
+            else:
+                #if row[col['skip']] > 0:
+                if self.clean_status(row,col['skip']) > 0: 
+                   outdata = "blocked"
+      msg = ''
+      for i in col:
+          msg = msg + "Row[" + i + "]:" + str(row[col[i]]) + ", "
+
+      self.logger.info(msg)
+      self.logger.info("Final Status: " + str(outdata) )
+      return outdata          
+
+  def format_eta(self,basedate=None,eta=None):
+#      date = basedate
+      if not basedate:
+          basedate = datetime.now()
+      else:
+          #Convert String to Datetime  supports:  "%Y-%m-%dT%H:%M:%S%z"
+          if not isinstance(basedate, datetime):
+              basedate =  datetime.strptime(basedate, "%Y-%m-%dT%H:%M:%S%z")
+      #eta = wk1 or WK1
+      eta_clean = str(eta).strip()      
+      if not eta_clean == '':
+          eta_clean = eta_clean.lower()
+          eta_clean = eta_clean.replace('wk', '')  
+          if int(eta_clean):
+              date = basedate + timedelta(days=int(eta_clean) * 7)
+          else:
+              date = basedate
+      else:
+          date = basedate
+      # Return a Date object
+      # data = self.qt.reformat_datetime(date,informat='%Y-%m-%d',outformat='%Y-%m-%dT%H:%M:%S%z')
+      return date
+  
   def popul_release(self,name=None):
        # Check if Name in qtest_dict
        if not name in self.qtest_dict:
@@ -561,8 +1073,8 @@ class Process_Test_Runs(object):
                self.logger.debug('Found Release: ' + str( self.qtest_dict[name] ) )
        return self.qtest_dict[name]
 
-  def create_find(self,name, obj_type='test-cycle', qtest_dict={},parent=None,tc=None):     
-     data = None
+  def create_find(self,name, obj_type='test-cycle', qtest_dict={},parent=None,tc=None,properties=None):     
+     data = {}
      new = False
      match obj_type:
           case 'test-cycle':
@@ -595,16 +1107,34 @@ class Process_Test_Runs(object):
               # lookup name and parent ID
               # looks up in list [{tr},{tr},{tr}]
               # if self.tr is empty read all from Project and populdate self.tr
-              tr = self.lookup_data(self.tr,'test-runs',name,qtest_dict['id'])
-              # if not name in qtest_dict:
+              tr = self.lookup_data(self.truns,'test-runs',name,qtest_dict['id'])
+              if not tr:
+                  tr = {}
+              if self.config['qtest']['create_test_run_flag'] == "True":
+                    create_enable = True
+              else:
+                    create_enable = False
+
               if len(tr) == 0:
-                  # no obj Create one
-                  #New Test-Cycle add it to the Dictionary.
-                  # Create or Read CL Obj Return data:
-                  data = self.qt.find_create_obj(name,obj_type,parent['id'],tc)
-                  # qtest_dict[name] = data
-                  # add test Run to  list
-                  self.tr.append(data)
+                self.logger.info("No TR Found")
+  
+                if not create_enable:
+                    self.logger.info("No TR Created: create_test_run_flag == False" )
+                    data = {}
+                    return data
+                # no obj Create one
+                # New Test-Cycle add it to the Dictionary.
+                # Create or Read CL Obj Return data:
+                 
+                data = self.qt.find_create_obj(name,obj_type,parent['id'],tc,properties,create_enable)
+                if not isinstance(data,str):
+                    if 'id' in data:
+                        # add test Run to  list
+                        self.truns.append(data)
+                else:
+                    self.logger.error("Error Content: " + str(data))
+                    self.logger.error("ERROR: Failed to create test Run: " + str(name) + "\n Parent ID: " + parent['id'] + "\n TC: " + str(tc) + "\n Properties: " + str(properties))
+                    self.logger.error("Error Content: " + str(data.content))
               else:
                   data = tr
           case _:
