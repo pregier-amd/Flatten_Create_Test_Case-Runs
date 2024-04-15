@@ -462,7 +462,7 @@ class Process_Test_Runs(object):
 
       # data = subprocess.check_output(['cd' , directory,";", cmd,";","cd .."])
       result = subprocess.getoutput(cmd)
-
+      self.logger.info("download_file Result: " + str(result) )
       return result
 
   def save_progress(self,filename=None,data=None):
@@ -487,18 +487,34 @@ class Process_Test_Runs(object):
   def expand_tc_range_pass_fail(self,data):
       outdata = []
       cnt =1
+      # Outside Loop all Rows in tracker
       for row in data:
+          # Debug Check for Specific Info 
+#          if row['Waived'] != 11:
+#          if row['Test Case ID'] != 'mhub032.11':
+#              cnt += 1
+#              continue
+
           # Process Comma Sep List
           # create flat list of TC's read and us the Ranges found.
+          # Repeat the Row for Each  row['Total Variations']
           new_row = self.get_id_list_ext_pass_fail(row,cnt)
-#          outdata.append( new_row )
           for i in new_row:
               outdata.append(i)
-          #outdata = outdata + new_row
+          #Input Row Number
           cnt += 1
       return outdata
+  def init_totals(self,indata=None,cols=None,outdata=None):
+      if not outdata:
+          outdata = {}
+      for i in cols:
+          outdata[i] = self.to_int(indata[i])
+      return outdata
+
   def get_id_list_ext_pass_fail(self,row,row_cnt=None):
       outdata=[]
+      # For each row['Test Case ID']:
+      #     Delimited list of test Cases may have Ranges, or individual TC Expand init o individual Variation.
       # Split the Data into multiple ID's
       # <string>,\d -> <string>\d     # Single Number
       # <string>,\d-\d   <Sting>\d-\d # Range 
@@ -506,15 +522,38 @@ class Process_Test_Runs(object):
       id_list = re.split(',|\s+|\uff0c', org_tc)      
       id_list = [ re.sub(r'\s+|,|\r', '',  x)  for x in id_list]
       cnt = 1
+      # Goal is t oproduce a Row for Each Variation.
       total_variation = row['Total Variations']
+      # Tracks the Number of Pass, Waived, Fail, Skipped, Variations, and IF the PRe/Post has had a test Run.
+      # For Variations Distrubute then over Pass then Waived, Fail, then Skipped.. 
+      self.pre_status_col  = ['Pass'  ,'Waived'  ,'Fail'  ,'Skip'  ]
+      self.post_status_col = ['Pass.1','Waived.1','Fail.1','Skip.1']
+
+      # Set the Row Level Counts, for each range Decrement the Count as it is used.
+      # when the Next Range, or Test case is used decrement
+      # pre/post totals are decremented in self.scale_cnts()
+      self.pre_totals  = self.init_totals(row, self.pre_status_col + ['Total Run'] )
+      self.post_totals = self.init_totals(row,self.post_status_col + ['Total Run.1'] )
+
+       # Use the Split List from ['Test Case ID'].split(...)
+      variation =1
       for tc in id_list:
-          # Select the Test case to use
+          # Modify the row with current TC
           row['Test Case ID'] = tc
-          #self.logger.info("Comma List Expansion CNT: " + str(cnt) +  " tc:" + str(tc) )
-          # Update the Run counts etc.. Look for ranges and expand them
-          for i in self.expand_range_multi_pass_fail(tc,row,cnt):
+
+          # Expand the Row into multiple rows based on #of variations.
+          # Look for Ranges of the TC and produce multiple repeated rows Mak them as Pass/Waived/Fail/Skipped 
+          # class Variables pre/post_totals supports multiple TCs to count down the total runs.
+          # I.e. tc1.1-4, tc2.2  to count down the Total Runs by 5
+          # If pre/post_totals[] > 0 then expand them.. Use "Total Runs"
+          # record the Variation being worked on self.current_variation
+          for i in self.expand_range_multi_pass_fail(tc,row,variation):
               total_variation -= 1
+              variation += 1
+              i['variation'] = variation
               i['Remainder Variations'] = total_variation 
+              i['PreTotal'] = str(self.pre_totals)
+              i['PostTotal'] = str(self.post_totals)
               i['input variations'] = row['Total Variations']
               i['org test case id'] = org_tc
               i['test_list_id'] = row_cnt
@@ -524,7 +563,6 @@ class Process_Test_Runs(object):
           # Range Expanded <str>.1-15  = str1,str2,str3,str4,str5,...str15
           # Calculate the Pre- post Execution Columns and return the full rows.
       return outdata
-
 
 
   def get_id_list_extended(self,data):
@@ -541,14 +579,10 @@ class Process_Test_Runs(object):
           outdata = outdata + flat_tc
       return outdata
 
-  def expand_range_multi_pass_fail(self,data,row,comma_cnt):
-
-      # Calculate:
-      # '# of Planned Pre-Si Test Cases','Pass','Total Run'  Pre
-      # '# of Planned Pre-Si Test Cases','Pass','Total Run'  post
+  def expand_range_multi_pass_fail(self,data,row,variation):
+      # Output Rows Single Variation per, With 1 Pass 
       outdata =[]
-      pre={}
-      post={}
+
       #supports <string>\d*\s*-\d*
       range_1 = re.compile(r'^(.*?)(\d*)-(\d*)')
       range_match = range_1.match(data)
@@ -557,7 +591,7 @@ class Process_Test_Runs(object):
       row_cp = row.copy()
       row_cp['Total Variations'] = 1
 
-      cnt = 1
+      # Count for rows in list of TCs I.e. tc1.1-4,tc2.1-3 cnt = 1 - 7
       rng_flag = False
       if (range_match := re.match(range_1,data)) is not None:
          if range_match.group(2):
@@ -572,28 +606,33 @@ class Process_Test_Runs(object):
          for i in range(rmin,rmax):
 
             # update Variations, Pass, Fail, Etc.. for Repeated Rows.  
-            row_cp = self.update_repeated_row(row,cnt)
+            row_cp = self.update_repeated_row(row,variation)
             tc_clean = str( range_match.group(1) ) + "." + str(i)
             row_cp['Test Case ID'] = re.sub(r"\.\.", ".", tc_clean)
 
             # save updated row into output buffer
+            variation += 1 
             outdata.append(row_cp.copy())
-            cnt += 1
       else:
          # No Changes Not A Range. Pass through the Row
          # update Variations, Pass, Fail, Etc.. for Repeated Rows.
-         row_cp = self.update_repeated_row(row,comma_cnt)
+#         row_cp = self.update_repeated_row(row,comma_cnt)
+         row_cp = self.update_repeated_row(row,variation)
+         variation += 1
          outdata.append(row_cp)
+ 
       return outdata
-  def update_repeated_row(self,row,cnt):
+  def update_repeated_row(self,row,variation):
         row_cp = row.copy()
         row_cp['Total Variations'] = 1
+        self.logger.debug("update_repeated_row Var: "+ str(variation) + str(row['Test Case ID']) )
+        self.logger.debug("Pre-Totals: " + str(self.pre_totals))
 
         # Pre-Silicon
         # if expansion cnt <= value set output to 1
         # wrote 3 , 1,2,3 enter 1 for 4,5,..Max enter 0
         for i in ['# Written','# of Planned Pre-Si Test Cases','Total Run','Total Run.1']:
-            row_cp[i]= self.ls_eq(cnt,row[i] )
+            row_cp[i]= self.ls_eq(variation,row[i] )
 
         # Decrement Pass to 0 then Decrement Fail to 0, then Waive, then Skip.
         # row['Pass']  = 1 if (cnt > total ) && cnt <= 0 + pass
@@ -605,48 +644,20 @@ class Process_Test_Runs(object):
         # row['Skipped'] = 1 if (cnt > total  && cnt <= (total + skipped) )
         for i in ['# of Planned Pre-Si Test Cases','Total Run','Total Run.1']:
             # 1 Cnt per row, until cnt is >= inital Value
-            row_cp[i] = self.ls_eq(cnt,self.to_int(str(row[i])) )
+            row_cp[i] = self.ls_eq(variation,self.to_int(str(row[i])) )
 
         # Scale the Pre-silicon Counts.
-        row_cp = self.scale_cnts(cnt,row,row_cp,['Pass','Fail','Waived','Skip'])
+        # Use Class Variables for storing the Total PASS, Waived, Fail, Skipped Values for the Row.
+        # Multiple Ranges are  
+        row_cp,self.pre_totals = self.scale_cnts(variation,row,row_cp,self.pre_status_col,self.pre_totals,'Total Run')
 
-        # Scale the Post-silicon Counts.               
-        row_cp = self.scale_cnts(cnt,row,row_cp,['Pass.1','Fail.1','Waived.1','Skip.1'])
+        # Scale the Post-silicon Counts. 
+        # Decremetn the Totals for the row              
+        row_cp, self.post_totals = self.scale_cnts(variation,row,row_cp,self.post_status_col,self.post_totals,'Total Run.1')
 
 
-
-        #fail_int = self.to_int(row['Fail'])
-        #pass_int = self.to_int(row['Pass'])
-
-        #total_run = self.to_int(str(row['Total Run']))
-
-        #ls_eq_list_pre =['# of Planned Pre-Si Test Cases','Pass','Fail','Waive','Skip']
-        #for i in ls_eq_list_pre:
-            #max_v = self.to_int(str(row[i]))
-            # Rolling total  Pass + Fail + Waive + Skip
-            #total = total + max_v
-            #row_cp[i]= self.ls_eq(cnt,int(max_v) ) 
-
-#        row_cp['Fail'] = self.gr_eq(cnt,int(pass_int + fail_int) )
-  #      row_cp['Fail'] = self.gr_eq(cnt,int(fail_int), )
-
-        # Post-Silicon
-        # if expansion < # written = 1
-        # wrote 3 , 1,2,3 enter 1 for 4,5,..Max enter 0
-        
-        # Planned for Pre-Silion cnt <= max 
-        # fail = 1 if cnt >= pass fail cnt
-   
-   #fail_int = self.to_int(row['Fail.1'])
-   #     pass_int = self.to_int(row['Pass.1'])
-   #     ls_eq_list_pre =['Pass.1','Fail.1','Skip.1','Total Run.1']
-   #     for i in ls_eq_list_pre:
-   #         max_v = self.to_int(str(row[i]))
-   #         row_cp[i]= self.ls_eq(cnt,int(max_v) ) 
-
-    #    row_cp['Fail.1'] = self.gr_eq(cnt,int(pass_int + fail_int) )
         return row_cp
-  def scale_cnts(self,cnt=None,row=None,row_cp=None,col_list=None):
+  def scale_cnts(self,cnt=None,row=None,row_cp=None,col_list=None,row_totals=None,total_k=None):
         # col_list  Example: ['Pass','Fail','Waive','Skip']
         #cnt is 1 based
         # Decrement Pass to 0 then Decrement Fail to 0, then Waive, then Skip.
@@ -660,16 +671,32 @@ class Process_Test_Runs(object):
         total = 0
         for i in col_list:
             # walks through ['Pass','Fail','Waived','Skip']
-            value = self.to_int(str(row[i]))
-            # 
-            row_cp[i] = self.grt(cnt,int(total) ) and self.ls_eq(cnt,total + value)  
-
+            value = self.to_int(str(row_totals[i]))
+            self.logger.debug("scale_cnts col[" + i + "]" + " Total: " + str(total) + " cnt: " + str(cnt) )
+            # Determine if run has happend:
+            if self.grt(cnt,int(total) ) and self.ls_eq(cnt,total + value):
+               # Variation Accepted:
+               self.logger.debug("Run: 1")
+               row_cp[i] = 1
+               # Decrement the Total Pass, Fail, Waived, Skip
+               # limit to 0
+#               row_totals[i]       = self.dec_check(row_totals[i],1,0)
+#               row_totals[total_k] = self.dec_check(row_totals[total_k],1,0)
+            else:
+               # No Variation
+               row_cp[i] = 0
+ #row_totals[total_k] -= 1
             # Rolling total  Pass + Fail + Waive + Skip
             total = total + value
-        return row_cp
+        return row_cp,row_totals
 
 
-
+  def dec_check(self,value=None,sub_value=1,limit=0):
+      if value > limit:
+          value -= sub_value
+      if value < limit:
+          value = limit
+      return value
 
   def ls_eq(self,cnt,max):
         max = self.to_int(max)
@@ -1127,6 +1154,11 @@ class Process_Test_Runs(object):
                 # Create or Read CL Obj Return data:
                  
                 data = self.qt.find_create_obj(name,obj_type,parent['id'],tc,properties,create_enable)
+                if 'name' in data:
+                    self.logger.info("Created TR: " + data['name'])
+                else:
+                    self.logger.info("Created TR Generic")
+
                 if not isinstance(data,str):
                     if 'id' in data:
                         # add test Run to  list

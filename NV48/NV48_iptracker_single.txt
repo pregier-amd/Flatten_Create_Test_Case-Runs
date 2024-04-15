@@ -1,1 +1,1 @@
-https://myworktor.amd.com/sites/DiagnosticDomain/Shared%20Documents/Programs/NV48/Common/IP%20Status%20Tracker/Navi48_VCN_Diagnostics_Status_Tracker.xlsm
+https://myworktor.amd.com/sites/DiagnosticDomain/Shared%20Documents/Programs/NV48/Common/IP%20Status%20Tracker/NV48_GFX_Diagnostics_Status_Tracker.xlsm

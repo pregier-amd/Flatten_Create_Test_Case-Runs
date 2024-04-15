@@ -466,7 +466,7 @@ class Qtest(object):
          for i in test_case['items']:
            test_case = i
       # save test case
-      self.tc = test_case
+      #self.tc = test_case
 
       # approve the Test Case if not Integer. (New or Existing)            
       if( float( test_case['version']) % 1 > 0):
@@ -474,7 +474,8 @@ class Qtest(object):
          linked = self.link_obj(self.config['ws_requirements'][ws],test_case['id'])
          # Approve the Test Case if the reponse has data.
          test_case = self.approve_tc(test_case['id'])
-
+      # save test case
+      self.tc = test_case
       logging.debug('Using TC: ' + self.tc['name'] + " id: " + str(self.tc['id']) + " Version: " + str(self.tc['version']) )
       return test_case
 
