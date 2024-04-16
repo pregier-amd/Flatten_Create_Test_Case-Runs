@@ -867,7 +867,9 @@ class Process_Test_Runs(object):
         else:
            planned = self.config['dates']['post_week1']
            # Eta WK * 7 days Use the ETA Column for the PLanned Information
-           planned_str = datetime.strftime(self.format_eta(planned,row['ETA']),"%Y-%m-%dT%H:%M:%S%z") 
+#           planned_str = datetime.strftime(self.format_eta(planned,row['ETA']),"%Y-%m-%dT%H:%M:%S%z") 
+           # Run at Start Date.
+           planned_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z") 
 
         # For Test Run Planning Dates.
         properties={}
@@ -1076,7 +1078,8 @@ class Process_Test_Runs(object):
       eta_clean = str(eta).strip()      
       if not eta_clean == '':
           eta_clean = eta_clean.lower()
-          eta_clean = eta_clean.replace('wk', '')  
+          eta_clean = eta_clean.replace('w', '')  
+          eta_clean = eta_clean.replace('k', '')  
           if int(eta_clean):
               date = basedate + timedelta(days=int(eta_clean) * 7)
           else:
