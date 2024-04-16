@@ -283,6 +283,8 @@ class Process_Test_Runs(object):
 
       # Process exec_data
       # Expand the Test Case ID's write to  "*expanded"
+
+# FIXXXX Debug Perform Create CYcle TR Etc..     
       self.process_exec_data_after_expanded(self.expanded_data,filename)
 
       # write_audited Expanded Data.
@@ -435,7 +437,8 @@ class Process_Test_Runs(object):
         case '.txt': 
             # Read the file
             f = open(filename, 'r')
-            data = f.readline()
+#            data = f.readline()
+            data = f.read()
             f.close()
             return data
 

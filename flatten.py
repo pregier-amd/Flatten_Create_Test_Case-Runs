@@ -128,10 +128,10 @@ class Flatten(object):
     def get_base_suffix(self,data):
         odata ={}
         #Range <base><x> - <y>
-        m_base_range = (re.compile(r'^(.*?\.)(\d*)\s*-\s*(\d*)') ).match(data)
+        m_base_range = (re.compile(r'^(.*\.)(\d*)\s*-\s*(\d*)') ).match(data)
 
         #Range <base>.<number>
-        m_base_min = (re.compile(r'^(.*?\.)(\d*)')).match(data)
+        m_base_min = (re.compile(r'^(.*\.)(\d*)')).match(data)
         # x-y
         m_range = (re.compile(r'(\d*)\s*-\s*(\d*)')).match(data)
         # single decimal
@@ -664,7 +664,8 @@ parser.add_argument('-txt_fctr', '--txt_flat_cyc_suite_tr', nargs=3, type=str, h
 
 
 sys.argv.append('--txt_flat_cyc_suite_tr')
-sys.argv.append('./NV48/NV48_iptracker_single.txt')
+# sys.argv.append('./NV48/NV48_iptracker_single.txt')
+sys.argv.append('./NV48/NV48_iptracker_final_list.txt')
 sys.argv.append(False)
 sys.argv.append('0')
 
