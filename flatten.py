@@ -131,7 +131,8 @@ class Flatten(object):
         m_base_range = (re.compile(r'^(.*\.)(\d*)\s*-\s*(\d*)') ).match(data)
 
         #Range <base>.<number>
-        m_base_min = (re.compile(r'^(.*\.)(\d*)')).match(data)
+#        m_base_min = (re.compile(r'^(.*\.)(\d*)')).match(data)
+        m_base_min = (re.compile(r'^(.*\.)(\d*.*)')).match(data)
         # x-y
         m_range = (re.compile(r'(\d*)\s*-\s*(\d*)')).match(data)
         # single decimal
