@@ -1013,23 +1013,27 @@ if __name__ == "__main__":
     page = 2
     
     # set the Project
-    qta.project_id = '130320'
+    qta.project_id = '125506'
 
-    #keyword = "UPDATE_STATUS:", status=None,prj=None,table=None,comment=None, duration=None
     
-#    d = qta.search_object('test_cases','test-cases',None,None)
     print("Start Transfer:")
     start_ts = qta.time_gen(True)
-                
+    d = qta.search_object('test_cases','test-cases',None,None)
+#    d = qta.search_object('requirements','requirements',None,None)
 
-    d = qta.search_object('test_case_run','test-runs',None,None)
+#    d = qta.search_object('test_case_run','test-runs',None,None)
   
     end_ts = qta.time_gen(True)
     duration = end_ts - start_ts
     dur_str= round(duration,3)
 
     print("Transfered:" + str(len(d)) + " Duration: " + str(dur_str) + "Secs" )
-
-
+    cnt = 1
+    for item in d:
+#        print(item['name'] + "\tpid: " + str(item['pid']))
+        print(item)
+        cnt += 1
+        if cnt > 5:
+           break
     sys.exit(0)
 
