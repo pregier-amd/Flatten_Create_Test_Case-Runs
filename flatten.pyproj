@@ -4,12 +4,13 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>79b352f7-47a8-461b-afdb-d2a28128ff1e</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>flatten.py</StartupFile>
+    <StartupFile>qtest.py</StartupFile>
     <SearchPath>..\flatten</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <Name>flatten</Name>
     <RootNamespace>flatten</RootNamespace>
+    <IsWindowsApplication>False</IsWindowsApplication>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>

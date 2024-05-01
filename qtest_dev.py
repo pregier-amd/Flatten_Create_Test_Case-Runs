@@ -9,21 +9,29 @@ from datetime import datetime
 from datetime import date # Set Timezone
 import pytz
 import time
+import configparser
+import queue as Queue
+from threading import Thread
+import threading
 
 class Qtest(object):
   projects = []
   data_cache={}
-  eastern_tz = pytz.timezone('US/Eastern')
+  eastern_tz = pytz.timezone('America/Newyork')
   
 
   def __init__(self,projname='Diags-Breithorn',logger = None, config =None ):
       self.projname = projname
       self.project  = ''
       self.proj_id = ''
+      if( not config):
+          config = configparser.ConfigParser()
+          config.read('config.ini')
       self.config = config
       self.tc = ''
       self.tr = ''
       self.tl = ''
+
       #Holds the Custom Field Data for Each type
       # fields[test-russ] etc..
       self.fields={}
@@ -34,6 +42,29 @@ class Qtest(object):
           self.logger = self.log('qtest.log')
       else:
           self.logger = logger
+
+
+      self.page       = 1
+      self.page_size  = self.config['qtest']['page_size']     #100  # size of the page
+      self.parameters = {}
+      self.page       = 1
+
+      #Setup Queue SYstems
+      self.maxthreads   = int(self.config['request_queue']['maxthreads'])
+      self.maxqueuesize = int(self.config['request_queue']['maxqueuesize'])
+      self.maxendpointthreads = int(self.config['request_queue']['maxendpointthreads'])
+      self.init_db()
+
+      self.search_obj_queue = None
+      
+
+      # Shared per Tablename  endpoint_buffer[tablename]
+      self.endpoint_buffer={}
+
+      # Create the Queue and worker Threads.
+      self.queue_search_obj_init(self.search_obj_queue,self.maxthreads, self.maxqueuesize)
+
+
 
   def log(self,outfile): 
       logging.basicConfig(
@@ -47,6 +78,254 @@ class Qtest(object):
       logging.getLogger().setLevel(logging.WARNING)
       logging.getLogger().setLevel(logging.INFO)
       return logging.getLogger('logger')
+
+  def init_db(self):
+    self.token      = self.config['qtest']['token']         #'0118f6f6-b946-4383-abc8-abc555580b4a'
+    self.project_id = self.config['qtest']['project_id']    # default Project id
+    self.endpoint   = self.config['qtest']['endpoint']      #/requirements/'
+    self.server     = self.config['qtest']['server']        # https://amd.qtestnet.com'
+    self.uri        = self.config['qtest']['uri']           # /api/v3/projects/'  
+
+    # Parameters to send for requirements matix.
+    # size = page_size
+    self.page_size_params ={}
+    self.page_size_params['page'] = 1
+    self.page_size_params['size'] = self.page_size         
+    self.page_size_params['transfer_cnt'] =  0
+    self.page_size_params['getmore'] = True
+
+  def queue_search_obj_init(self,queue=None,maxthreads=1,queue_size=30):
+    self.search_obj_queue = Queue.Queue(self.maxqueuesize)
+
+    # Start the Worker Threads.
+    for i in range(maxthreads):
+        worker = Thread(target= self.process_search_obj_queue, args=(self.search_obj_queue, self.endpoint_buffer,))
+        worker.daemon=True
+        worker.start()
+  
+  def submit_search_obj_queue(self,tablename=None,queue=None,endpoint=None,parameters=None,query=None, page=None, maxpage=None):
+    
+    # Put each Table into the queue to be picked up by the next worker.
+    data = {}
+    # Mark Which Buffer to put results
+    data['tablename'] = tablename
+    data['endpoint'] = endpoint
+    data['parameters']= parameters
+    data['query']= query
+
+    # Loop through needed entries
+    for cnt in range(page,maxpage+1) :
+        data['page'] = cnt
+        # Send the Dictionary to the Queue
+        queue.put(data.copy())
+   #     self.logger.info("Submitted Search Obj queue " + str(data))
+    # launch threads.       
+    queue.join()
+
+  def process_search_obj_queue(self, queue, buffer={}):
+        while True:
+            # Queue up each Table to be Processed by a thread.
+            d =  queue.get()
+            thread = threading.get_ident()
+            msg = "Processing Search Obj_queue Work: " + str(threading.current_thread().name) 
+            self.logger.info(msg)
+#           print(msg)
+            
+            # perform Endpoint Operation and return Data.   
+            data = self.search(self.server,self.token,self.page_size,d['page'],'asc',d['query']) 
+
+            # Process the Properties, flat keys, and links 
+            # Tag maps to Tablename
+            norm = self.search_obj_normalize_data(data,d['tablename'])
+
+            # Save Data                            
+            self.update_buffer(buffer,d['tablename'],norm )
+            
+            # Save the Data.
+           # msg = "Recieved Buffer["+str(d['tablename'])+"] Page:" + str(d['page'])
+            msg = "Recieved Buffer["+str(d['tablename'])+"]" + str(threading.current_thread().name) +  " Page:" + str(d['page'])
+            # print(msg)
+            self.logger.info(msg)
+            queue.task_done()
+  def process_links(self,table_key=None,data=[]):
+        # extract ids from links:
+        # [{'rel': 'release', 'href': 'https://amd.qtestnet.com/api/v3/projects/129172/releases/923722'}]
+   
+        outdata=[]
+        linkdata={}
+        for record in data:
+            if 'links' in record:
+                for d in record['links']:        
+                    linkdata = linkdata | self.decode_links(d)
+                self.logger.debug("Links Data: " + str(linkdata))
+    #                print('URL: {}\nreturns: {}\n'.format(i, path_parts[2]))
+                # update the Record, and remove teh Links key
+                record.pop('links')
+                outdata.append(record.copy() | linkdata)
+            else:
+                outdata.append(record.copy())
+        return outdata
+    
+  def transform_pop(self,table_key=None,data=[]):
+        transform = {}
+        schema = self.schema_data[table_key]
+        for table in schema:
+               transform[table['replace_col'] ] = table['final_col']
+        outr = {}
+        outdata = []
+        for row in data:
+            outr = row.copy()
+            for replace_col in transform:
+               if replace_col in row:
+                   outr[transform[replace_col]] = row[replace_col]
+                   outr.pop(replace_col)
+            outdata.append(outr.copy())
+        return outdata
+  def caputure_items(self,data,key='items'):
+         #outdata = data['items']
+         outdata = []
+         recordData={'projectid':self.project_id}
+         for row in data[key]:
+            # Adding in the Project ID
+            for k in recordData:
+                row[k] = recordData[k]
+            if 'properties' in row:
+                # Convert Properties to Columns
+                flatprop = self.flat_properties( row.pop('properties') )
+                # add in the properties
+                row.update(flatprop)
+            outdata.append(row)
+         return outdata
+  def clean_data(self,data=None):
+        d = ''
+        if(data):
+            d = re.sub(r'[\[\]]','',data)
+        return d
+  def remove_spaces(self,data):
+        data = re.sub(r' ','_',data)
+        return data
+  def flat_properties(self,data):
+    out ={}
+    # {"field_id": 12998003,
+    #   "field_name": "Ip",
+    #   "field_value": "29",
+    #   "field_value_name": "IOHC"},
+    for prop in data:
+        if("field_value_name" in prop):
+           out[self.remove_spaces(prop["field_name"]) ] = self.clean_data(prop["field_value_name"])
+        else:
+           out[self.remove_spaces(prop["field_name"]) ] = self.clean_data(prop["field_value"])
+    return out
+
+  def search_obj_normalize_data(self,data=None,tablename=None):
+        #Flatten Properties into a K,v 
+        #Get the flat key,values and crate single Dictionary.
+        outdata = []
+        # Data from Endpoint is uder key 'items', a
+        tdata = self.caputure_items(data,'items')
+    
+        d = [{'items':[outdata]}]
+        match tablename:
+            case 'projects_API':
+                pass
+            case 'test_case_run_API':
+                tdata = self.process_links(tablename,tdata)
+                # test_runs Flatten the last Run Log key
+                key_list=['exe_start_date','exe_end_date']
+                for row in tdata:
+                    if 'latest_test_log' in row:
+                        last_log = self.extract_keys(row['latest_test_log'],key_list)
+                    else:
+                        # Ensure that there is a Last Log to support exe_start/end keys
+                        last_log ={}
+                        for k in key_list:
+                            last_log[k] =0
+                            
+                    row.update(last_log)
+            case _:
+                tdata = self.process_links(tablename,tdata)
+
+        tdata = self.transform_pop(tablename + "_trf",tdata)
+        for r in tdata:
+            outdata.append(r)
+        return outdata
+
+  def search_object_queued(self,tablename='requirements',object_type='requirements',lastmodified=None,fields=None):
+        outdata =[]
+        #Add in the Suffix to tablename
+        tablename= tablename + self.config['ssql']['suffix']
+        # If fields are passed in use it
+        if fields:
+            query = {"object_type": object_type ,"fields": fields,"query": "'name' ~ '%'" }
+        else:
+            # Default Fields
+            query = {"object_type": object_type ,"fields": ["*"],"query": "'name' ~ '%'" }
+        
+
+        # if Lastmodified date provided.
+        if(lastmodified):
+#            query = {"object_type": object_type ,"fields": ["*"],"query": "'name' ~ '%' AND 'Last Modified Date' > " + lastmodified }
+            query["query"] = query["query"]  + " AND 'Last Modified Date' > " + lastmodified
+        
+
+        self.parameters = {'includeExternalProperties':True}
+        self.endpoint='/search/'
+        #use qTest API to pull data
+
+        # Clear the databuffer
+        # Use the tablename as the key in the buffer
+        self.endpoint_buffer[tablename] =[]
+        
+        # loop through Pages until all data has been read.
+        order = 'asc'
+        trans_cnt = 0
+        page = 1    # 25
+
+        # First Page of Data
+        #Save it as well as determine howmany more pages to get.
+#        data = self.search(self.server,self.token,self.page_size,page,order,query)
+        data = self.search_queue_compat(self.server,self.token,self.page_size,page,order,query)
+
+        if('total' in data):
+            norm = self.search_obj_normalize_data(data,tablename)
+
+            self.update_buffer(self.endpoint_buffer,tablename,norm)
+
+            total= data['total'] 
+            # Calculate the Number of Pages needed to get the toal record count.
+            # then Add then add to the endpoint queue.         
+            maxpages = round(data['total'] / int(self.page_size) + 0.5)
+
+            # Creates queue Entries for each Page, and will be stored in
+            # self.endpoint_buff['tagx']
+            #Already transefered page 1 start with 2
+            if maxpages > 1:
+                # Fill the Queue with 1 Entry Per Page.
+                self.submit_search_obj_queue(tablename,self.search_obj_queue,tablename,None,query,2,maxpages)
+                    
+                # Wait for the Buffer to be emptied                   
+                self.search_obj_queue.join()
+                # Workers from Queue populate the buffer.
+                outdata = self.endpoint_buffer[tablename]
+                if total != len(outdata):
+                    self.logger.error("Failed to Transefer data for table: " + tablename + "qTest Table Size:" + str(total) + "!= xfer: " + str( len(outdata)) )
+
+        else:
+            self.logger.error("Failed to Get Valid Data for Query: " + str(query) )
+            self.logger.error("Response: " + str(data) )
+            total = 0
+
+            self.search_obj_normalize_data(data,tablename)
+                            
+        self.logger.debug("Transfer Stopped Stats: Page:" + str(page) + "\t " + str(trans_cnt) + "/" + str(total) )
+ 
+        if( not self.validate_keys(self.schema_data[tablename],outdata) ):
+            self.logger.error ("Unsupported Key in Data for Object: " + tablename)
+            raise
+
+        # self.exc.write_dict_excel(tablename + "_obj_transf.xlsx",outdata,'transformed')
+
+        return outdata
 
   def get_request(self,endpoint,params=None,body=None,headers=None):
       return self.request('get',endpoint,params,body,headers)
@@ -185,12 +464,13 @@ class Qtest(object):
     filt_obj =[]
     # Find the Data for Label 
     obj_data = self.get_fields(obj_type)
-
-    field_label = label
     if label == 'planned_start':
         field_label ='Planned Start Date'
     if label == 'planned_end':
         field_label ='Planned End Date'
+
+  
+
     filt_obj = list(filter(lambda d: d['label'] == field_label ,obj_data[obj_type] ))
     return filt_obj
 
@@ -207,7 +487,6 @@ class Qtest(object):
           logging.info("Project: " + i['name'] + " id: " + str(self.proj_id) )
       return self.project
   
-
   def get_obj(self,name=None,obj_type='modules'):
       # obj_types = ['projects','modules','requirements,'text-cases','test-runs']
       if obj_type not in list(self.data_cache.keys()):
@@ -217,7 +496,40 @@ class Qtest(object):
       self.logger.debug(obj_type + str(self.data_cache[obj_type]))
       self.project = self.filter('name',name,self.data_cache[obj_type])
       return self.data_cache[obj_type]
+  def search_queue_compat(self, server, token,  page_size=None, page=None, order='asc',query=None):
+    """Get list of assets,use search query in body
+    
+    Arguments:
+        server {string} -- Server URI
+        token {string}  -- Token value to be used for accessing the API
+        page_size {int} -- chunk transfer size
+        query           -- 
+    
+    Returns:
+        [string] -- List of data from the server, in JSON formatted
+    """
+    self.endpoint = '/search/'
 
+    if query is None:
+        return
+    else:
+        body = json.dumps(query)
+
+    if page_size is not None:
+        self.page_size=page_size
+
+    if page is None:
+        # Default page to 1
+        self.page = 1
+    else:
+        self.page = page
+
+    uri = self.uri + str(self.project_id) + self.endpoint +'?pageSize={0}&page={1}&order={2}&includeExternalProperties={3}'.format(str(page_size),str(page),order,'true')
+
+    server = server + uri 
+    headers = {'Authorization': 'Bearer {0}'.format(token)}
+    results = requests.post(server, headers=headers, json=query)
+    return results.json() #results.content
   def search(self, name=None, obj_type='test-cases'):
       valid_obj_types = [ 'releases' , 'requirements', 'test-cases', 
                           'test-runs', 'test-suites', 'test-cycles',
@@ -291,11 +603,9 @@ class Qtest(object):
        return d 
   def href(self,link=None,text=None):
       return "<a href=\"" + str(link) + "\"" + ">" + text + "<a>"
-
-  def create_test_case(self,config=None,row=None,parent_id=None,properties=None):
+  def create_test_case(self,config,row,parent_id):
       # row ['test case name']
       # row['start_datetime']
-      # row['step_description']
 
       # format the Body to create a test case
       body = {
@@ -303,31 +613,27 @@ class Qtest(object):
           "name": row['test case name'],
           "order": 1,
           # "pid": "TC-1",
-          "created_date":  self.reformat_datetime( row['start_datetime'],'%Y-%m-%dT%H:%M:%S'),
+          "created_date":  self.reformat_datetime(row['start_datetime']), # "2023-08-01T12:01:01.052Z",
           # "last_modified_date": "2023-08-01T12:01:01.052Z",
           "test_steps": [
             {
  
               "id": 1,
-              "description": "",
-              "expected": "Run to Conclusion, Does not Fail (MCA, or Functional), Does Not Hang Either Soft or Hardlock",
+              "description": "CCX Workstream Session ",
+              "expected": "Run to Conclusion, Does not Fail, Does Not Hang Either Soft or Hardlock",
               "order": 1,
               "group": 0,
               "parent_test_step_id": 0
               }
           ],
           "parent_id": parent_id,
-          "description": "Stress or Functional Test, ",
-          "precondition": "Configured OS, DREX, ,TNG Release Configured.",
+          "description": "LWA Session, 1 or More tests over Extended Period of time.",
+          "precondition": "CCX Configured OS, DREX, And Either Storm, CDL, HDRT Tests loaded.",
           "creator_id": config['qtest']['creator_id'],
           "agent_ids": [
             0
           ],
         }
-      # Add Properties
-      if properties:
-            body["properties"] = properties
-          
       logging.debug("Create Test Case Body: " + str(body) )
       endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-cases'
       data = self.post_request(endpoint,None,body,None)
@@ -364,7 +670,6 @@ class Qtest(object):
               params = {'parentId': parentId, 'parentType': 'test-cycle'}
               body = self.frmt_create_test_suite(name,None)
               data = self.get_request(endpoint,params,None,None)
-
               # Create if missing
               for cl in data:
                   # break if cycle present
@@ -377,40 +682,6 @@ class Qtest(object):
                   self.logger.info("Create " + obj_type + " :" + str(name) + " Parent ID: " + str(parentId) )
                   body = self.frmt_create_cycle(name,parentId,description=None)
                   data = self.post_request(endpoint,params,body,None)
-
-          case 'test-case':
-              endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-cases'
-              params = {'parentId': parentId, 'parentType': 'test-suite'}
- 
-              # Search
-              data = self.get_request(endpoint,params,None,None)
-
-              # Create if missing
-              for i in data:
-                  # break if cycle present
-                  if i['name'] == name:
-                      data = i
-                      create = False
-                      break
-              # name not matched create 
-              if create:
-                  self.logger.info("Create " + obj_type + " :" + str(name) + " Parent ID: " + str(parentId) )
-                  row ={}
-                  row['test case name'] = name
-                  now = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
-                  row['start_datetime'] = now
-
-                  properties = self.format_properties(properties_list,obj_type)
-
-                  # Create the Test Case if not Present                 
-                  data = self.create_test_case(self.config,row,parentId,properties)
-                  # Approve the Test Case
-                  if 'id' in data:
-                      test_case = self.approve_tc(data['id'])
-                  else:
-                      self.logger.error("Failed to Create Test Case MSG: " +str(data) + "Name: "+ str(name) )
-              
-                 
           case 'test-run':
               endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-runs'
               params = {'parentId': parentId, 'parentType': 'test-suite'}
@@ -443,55 +714,29 @@ class Qtest(object):
           case _:
               data ={}
       return data
-  def field_frmt(self,field=None,name=None,value=None,value_name=None):
+  def date_field_frmt(self,field=None,value=None):
       outdata = {}
       outdata['field_id']         = field['id']
-#      outdata['field_name']       = field['label']
-      outdata['field_name']       =  name
-
-      match field['attribute_type']:
-          case "ArrayNumber":
-              outdata['field_value']      = "[" + str(value) + "]"
-              outdata['field_value_name'] = "[" + value_name + "]"
-          case _:
-               outdata['field_value']      = str(value)
+      outdata['field_name']       = field['label']
+      outdata['field_value']      = value
+      outdata['field_value_name'] = value
       return outdata
 
   def format_properties(self,data=None,obj_type=None):
       outdata = []
       for prop in data:
           #Returns [{field}]
-          fields= self.lookup_fields(obj_type,prop)
-          if len(fields) > 0:
+          field= self.lookup_fields(obj_type,prop)
+          if len(field) > 0:
               self.logger.info("Format_Properties[" + str(prop) +  "]:" + str(data[prop]))
 #              d = field['field_value']= data[prop]
-              value = data[prop]
-              for field in fields:
-                  name = prop
-                  value = data[prop]
-                  if 'allowed_values' in field:
-                      # Lookup the allowed Values.
-                      # if not supported Raise the Exception.
-                      allowed = self.filter_allowed_values(str(data[prop]).strip(),field['allowed_values'])
-                      if len(allowed) < 1 :
-                          self.logger.error("Error: Custom Field Not Supported for: \"" + str(obj_type) + "\" To Fix: Add value to Field List: Not an Allowed Value: \"" + str(prop) + "\"[" + str(data[prop]) + "]")
-#                          raise "Exception Custom Field Not Supported!"
-                      else:
-                          # For allowed Values Version name and values must be lists.
-                          value = allowed[0]['value']                 
-                          name  = data[prop].strip()
-#                  d = self.field_frmt(field,data[prop], value)
-                  #        field_frmt(field[],field_name,field_value,field_value_name)                    
-                  d = self.field_frmt(field,data[prop], value, name)
-                  # append the formatted fields into a list
-                  outdata.append(d)
+              d = self.date_field_frmt(field[0],data[prop])
           else:
-              logging.error(obj_type + "[" + prop + "] is not supported")
-#              raise
+              logging.info(obj_type + "[" + prop + "] is not supported")
+
+          # append the formatted fields into a list
+          outdata.append(d)
       return outdata
-  def filter_allowed_values(self,label=None,allowed_values=None):
-      data = list( filter(lambda d: re.match(label, d['label']) and d['is_active'] , allowed_values ) )
-      return data
 
   def frmt_create_test_run(self,name=None,parentId=None,description=None,tc_id=None, properties={}):
       #  Id return an empty body
@@ -558,15 +803,12 @@ class Qtest(object):
         }
         return body
 
-  def find_create_test_case(self,config=None,row=None,ws=None,parent_id=None):
+  def find_create_test_case(self,config,row,ws):
       test_case = self.search(str(row['test case name']) )
       # Did not Find a Valid Test Case
       # Create one
-      if not parent_id:
-          parent_id = config['ws_modules'][ws]
-
       if( not test_case['items'] ):
-         test_case = self.create_test_case( config,row,parent_id )
+         test_case = self.create_test_case( config,row,config['ws_modules'][ws] )
       else: 
          logging.info("Found Existing Test Case cnt: " + str(len(test_case['items'])) )
          if( len(test_case['items']) > 1  ):
@@ -807,25 +1049,14 @@ class Qtest(object):
           if k in row:
                body[k] = row[k]
       return body
+  # run if File Run Directly.
+if __name__ == '__main__':
 
-  if __name__ == '__main__':
-    import configparser
-    import qtest
     # main
-    config = configparser.ConfigParser()
-    config.read('config.ini')
-    # Instance the Process Test Run Case
+   
+    project = 'Diags-NV4X'
+    qt = Qtest(project,None, None)
 
-    # Add Project 
-    # Disabled for checkin
-#    project = str(config['qtest']['project']) 
-      
-    qt = qtest.Qtest(project,None,config)
-    qt.proj_id = 130320
-    properties={}
-    properties["Ip"]          = 'GFX'
-    properties["Sub Ip"]      = 'GC' #row['Sub-IP Block']
-    properties["Test Case Framework"]   = 'TNG' # row['Framework']
-    tc = qt.find_create_obj("Test",'test-case',52737516,None,properties,True)
-    print("Test Complete")
-    # print(tc)
+
+    data = qt.search_object_queued('requirements','requirements',None,None)
+    print( len(data) )

@@ -27,15 +27,18 @@ import subprocess
 import time
 import urllib.parse
 import yaml
-import qTestAPI
+
+import queue as Queue
+from threading import Thread
+import threading
+
+
 
 class Process_Test_Runs(object):
   def __init__(self,logger = None, config =None, dateTStr=None ):
-      self.config_fname='config.ini'     
       if( not config):
           config = configparser.ConfigParser()
-          config.read(self.config_fname)
-
+          config.read('config.ini')
       self.config = config
 
       self.dateTStr = dateTStr
@@ -54,8 +57,24 @@ class Process_Test_Runs(object):
       self.test_run_log = {}
       self.init_qtest()
 
+      # Setup the Number of threads and queues for update table.
+      # Number of threads per Table endoint API (maxthreads == number of pages at a time.)
+      self.maxthreads   = 4
+      self.maxqueuesize = 600
+      self.update_tables_queue_init(self.maxthreads, self.maxqueuesize)
+
 
       pass
+  def update_req_endpoint_queue_init(self,maxthreads=1,queue_size=30):
+    self.upt_queue = Queue.Queue(queue_size)
+
+    # Start the Worker Threads.
+    for i in range(maxthreads):
+        worker = Thread(target= self.process_update_tables_queue, args=(self.upt_queue,))
+        worker.daemon=True
+        worker.start()
+
+
   def log(self,outfile): 
       logging.basicConfig(
                     filemode='w',
@@ -69,14 +88,10 @@ class Process_Test_Runs(object):
       logging.getLogger().setLevel(logging.INFO)
       return logging.getLogger('logger')
 
+
   def init_qtest(self):
       project = self.config['qtest']['project']
-      
       self.qt = qtest.Qtest(project,self.logger, self.config)
-      self.qta = qTestAPI.QtestAPI(self.config_fname)
-
-      # qTest API with Queues Multi threading
-      self.qta.project_id = self.qt.proj_id
 
       # Pull in the Project Data
       self.projects = self.qt.get_project(self.config['qtest']['project'])
@@ -97,43 +112,18 @@ class Process_Test_Runs(object):
              results = {}
       return results
  
-  def get_obj_all_queued(self,name=None, body=None,obj_data=[],obj_type='test-cases'):  
-      #use Web AI and get dat from qTest.
-      if not name:
-          # pull in all Test Cases
-          name = '%'  
+  def submit_req_endpoint_queue(self,projects=[], date=None, table_list=None):
+      self.upt_queue.put(data.copy())
 
-      #'test_case_version_id'
-      #'test_steps'
-      fields = ["name","id","pid","parentId","properties"]
-
-      if not body:
-          match obj_type:
-              case 'test-cases':
-                fields.append('version')
-                fields.append('test_case_version_id')
-                fields.append('description')
-                fields.append('test_steps')
-
-      body={
-            "object_type": obj_type ,
-            "fields": fields,
-            "query": "'name' ~ " + str(name)
-           }
-      # on error return the data.
-#     data = self.qt.search_body(body, obj_type='test-cases')
-      for p in self.projects:
-          self.qta.project_id = p['id']
-#      data = self.qt.search_body_all(body, obj_type)
-       #           search_object   (tablename='requirements',object_type='requirements',lastmodified=None,fields=None
-      tablename = obj_type.replace("-", "_")
-      data = self.qta.search_object(tablename,obj_type,None,fields)
-
-      # Loads data into obj_data. and checks for errors
-      self.store_obj_data_queued(data,obj_data)
-      self.logger.info("Get All " + str(obj_type) + " Cnt:" + str(len(obj_data)))
-      return obj_data
-#      return results
+  def process_req_endpoint_queue(self, upt_queue):
+    while True:
+        # Queue up each Table to be Processed by a thread.
+        d =  upt_queue.get()
+        #thread = threading.get_ident()
+        self.logger.info("Processing Queued update table:" + str(d))
+        print("Processing table using thread: " + threading.current_thread().name + "\n")
+        self.update_tables( d['projects'], d['date'], d['t'])
+        self.upt_queue.task_done()
 
   def get_obj_all(self,name=None, body=None,obj_data=[],obj_type='test-cases'):  
       #use Web AI and get dat from qTest.
@@ -143,7 +133,7 @@ class Process_Test_Runs(object):
 
       #'test_case_version_id'
       #'test_steps'
-      fields = ["name","id","pid","parentId","properties"]
+      fields = ["name","id","pid","parentId"]
 
       if not body:
           match obj_type:
@@ -166,25 +156,7 @@ class Process_Test_Runs(object):
       self.logger.info("Get All " + str(obj_type) + " Cnt:" + str(len(obj_data)))
       return obj_data
 #      return results
-  def store_obj_data_queued(self,indata={},obj_data={}):
-      results = None
-      #Has Items ..
-      if len(indata) != 0:
-          #results = data['items']
-          #Add results to  test Case List
-          # tc is stores {xxx:{id:123,name:xxx},yyyy:{'name':yyyy},z{}}
-          for i in indata:
-            # Save the Data from qtest into variable
-            #esults = self.tc['name']] = i
-    #              results = obj_data[i['name']] = i
-            results = obj_data.append(i)
-            #logging.info("Return Obj: Data: " + str(i) )
-            # On success returns last data type{'id':xxx,'name':xxx}
-      else:
-          self.error = indata 
-          self.logger.info("store_object no data:")
-          results = []
-      return results   
+     
   def store_obj_data(self,indata={},obj_data={}):
       results = None
       if 'items' in indata:
@@ -213,10 +185,8 @@ class Process_Test_Runs(object):
         # get_tc_all( name, body, self.tc,obj_type='test-cases')
         directory = os.path.dirname(self.ip_tracker_basefilename)
         filename = directory + "/" + obj_type + ".yml"
-  
         # if the Data has been read us the data.
-        # Queued version of get_obj_all  Supports always reading the data.
-        if os.path.isfile(filename) and False:
+        if os.path.isfile(filename):
             self.logger.info("Restoring data in File: " + filename)
             obj_data = self.read_file(filename)
             if obj_type == 'test-cases':
@@ -224,11 +194,9 @@ class Process_Test_Runs(object):
             if obj_type == 'test-runs':
                self.truns = obj_data
         else: 
-#            obj_data = self.get_obj_all( None, None, obj_data , obj_type)
-            obj_data = self.get_obj_all_queued( None, None, obj_data , obj_type)
-            # Queued version of get_obj_all  Supports always reading the data.  
-            # self.logger.info("Saving Data to File: " + filename)
-            # self.write_yaml_file(filename,obj_data)
+            obj_data = self.get_obj_all( None, None, obj_data , obj_type)
+            self.logger.info("Saving Data to File: " + filename)
+            self.write_yaml_file(filename,obj_data)
 
         # self.write_excel("Exception_debug.xlsx",obj_data)
       #  template for using filter list(filter(lambda d: d['type'] in keyValList, exampleSet))
@@ -906,18 +874,13 @@ class Process_Test_Runs(object):
         # enabled to Be entered in the Pre/Post Release
         parent = self.ts
 
-        # check for Test Case  Create Test Case if needed.          
-        self.tc = self.find_tc(row['Test Case ID'])
-        # For Test Run Planning Dates.
-        properties={}
-        properties["Ip"]          = self.ip
-        properties["Sub Ip"]      = row['Sub-IP Block']
-        properties["Framework"]   = row['Framework']
-        self.tc = self.create_find(row['Test Case ID'],'test-case',self.qtest_dict[release][cycle][suite],parent,self.tc,properties) 
-
+        # check for Test Case            
+#        self.tc = self.find_tc(row['Test Case ID'])
+        # Find or Create the test case: [parent][test-case]
+        self.tc = self.create_find(row['Sub-IP Block'],'test-case',self.qtest_dict[release][cycle][suite],parent)
         if not self.tc:
             # No Test Case:
-            self.logger.error("No Test Case Found: " + row['Test Case ID'] + " Skipped Row: " + str(cnt) + "\n Needs to be added to Test Design Tab:" )
+            self.logger.error("No Test Case for tr Name: " + tr_name )
             self.tc['name'] = "Not Found"
             self.test_run ={}
             self.test_run_log ={}
@@ -982,22 +945,14 @@ class Process_Test_Runs(object):
         #Add 1 Week to Planned Date
         date_dict = {}
         execute_today_flag = self.config.getboolean('qtest','execute_today_flag')
-        if execute_today_flag and not pre_flag:
+        if execute_today_flag:
             basedate = datetime.now()
             now = datetime.strftime(basedate, "%Y-%m-%dT%H:%M:%S%z")
-            now = self.qt.reformat_datetime(now,'%Y-%m-%dT%H:%M:%S',outformat='%Y-%m-%dT%H:%M:%S%z')
-
             exec_date_str = datetime.strftime(self.format_eta(now,''),"%Y-%m-%dT%H:%M:%S%z")
         else:
             exec_date_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z")
 
-
-        if pre_flag:
-            exec_wk = "-1"
-        else:
-            exec_wk = "1"
-
-        date_dict['start_datetime'] = datetime.strftime(self.format_eta(exec_date_str,exec_wk),"%Y-%m-%dT%H:%M:%S%z")  #  self.format_eta(planned_str,'wk1') 
+        date_dict['start_datetime'] = datetime.strftime(self.format_eta(exec_date_str,"wk1"),"%Y-%m-%dT%H:%M:%S%z")  #  self.format_eta(planned_str,'wk1') 
         date_dict['end_datetime']   = date_dict['start_datetime'] 
 
         self.tc = self.tcase_approved(self.tc)
@@ -1010,34 +965,10 @@ class Process_Test_Runs(object):
             create_enable = False
 
         if 'id' in self.test_run:
-            #  if  test Run Status Pass/ Waived/Failed/Blocked != tl_row[Status]['Name']
-            #  Only update a Test Log if the Status has changed. Supresses Duplicates. 
+            self.test_run_log = self.qt.test_run_log_flt(tl_row,self.test_run['id'],create_enable)
 
-            # if TR was Created use theProperties Key
-            if 'properties' in self.test_run :
-                status_field = self.get_field(self.test_run['properties'], "Status")
-                tr_current_status = status_field['field_name']
-            else:
-                # Format if Read from qTest
-                tr_current_status = self.test_run['Status']
-
-            if(tr_current_status != tl_row['status']['name']):   
-                # Create the Test Run Log
-                self.test_run_log = self.qt.test_run_log_flt(tl_row,self.test_run['id'],create_enable)
-            else:
-                #Matching Run Log Status Do not Add another Run.
-                self.logger.info("Matching Run Log Status Do not Add another Run")
         self.update_audit(row,pre_flag)
 
-  def get_field(self,properties=None, field_name="Status"):
-      #{
-      #  "field_id": 12423274,
-      #  "field_name": "Status",
-      #  "field_value": "605",
-      #  "field_value_name": "Unexecuted"
-      #  },
-      data = list( filter(lambda d: re.match(field_name, d['field_name']) , properties ) )
-      return data[0]
   def tcase_approved(self,tc=None):
       if not "version" in tc:
           self.logger.info("No \"version\" in TC:" + str(tc) )
@@ -1250,60 +1181,6 @@ class Process_Test_Runs(object):
                   qtest_dict[name] = data
               else:
                   data = qtest_dict[name]
-          case 'test-case':
-              # Check for Key 'test-suite' in release.
-              # if the key is present then there is a Test Case.
-              # lookup name and parent ID
-              # looks up in list [{tr},{tr},{tr}]
-              # if self.tr is empty read all from Project and populdate self.tr
-              match obj_type:
-                 case 'test-case':
-                    obj = self.lookup_data(self.tcases,obj_type,name,qtest_dict['id'])
-                 case 'test-run':
-                    obj = self.lookup_data(self.truns,obj_type,name,qtest_dict['id'])
-
-              if not obj:
-                  obj = {}
-
-              # if self.config['qtest']['create_test_run_flag'] == "True":
-              create_obj_name = "create_" + str(obj_type) + "_flag"
-              if self.config['qtest'][create_obj_name] == "True":
-                    create_enable = True
-              else:
-                    create_enable = False
-
-              if len(obj) == 0:
-                self.logger.info("No "+ str(obj_type)+ " Found")
-  
-                if not create_enable:
-                    self.logger.info("No " + str(obj_type) + " Created:" + str(create_obj_name) + " == False" )
-                    data = {}
-                    return data
-                # no obj Create one
-                # New Test-Cycle add it to the Dictionary.
-                # Create or Read CL Obj Return data:
-                 
-                data = self.qt.find_create_obj(name,obj_type,parent['id'],tc,properties,create_enable)
-                if 'name' in data:
-                    self.logger.info("Created " + str(obj_type) + "Name: " + data['name'])
-                else:
-                    self.logger.info("Created " + str(obj_type) + " Generic")
-
-                if not isinstance(data,str):
-                    if 'id' in data:
-                        # add to  list
-                        match obj_type:
-                            case 'test-case':
-                                self.tcases.append(data)
-                            case 'test-case':
-                                self.truns.append(data)
-                else:
-                    self.logger.error("Error Content: " + str(data))
-                    self.logger.error("ERROR: Failed to create " + str(obj_type) + " Name: " + str(name) + "\n Parent ID: " + parent['id'] + "\n TC: " + str(tc) + "\n Properties: " + str(properties))
-                    self.logger.error("Error Content: " + str(data.content))
-              else:
-                  data = obj
-
           case 'test-run':
               # Check for Key 'test-suite' in release.
               # if the key is present then there is a Test Case.
@@ -1327,7 +1204,8 @@ class Process_Test_Runs(object):
                     return data
                 # no obj Create one
                 # New Test-Cycle add it to the Dictionary.
-                # Create or Read CL Obj Return data:                 
+                # Create or Read CL Obj Return data:
+                 
                 data = self.qt.find_create_obj(name,obj_type,parent['id'],tc,properties,create_enable)
                 if 'name' in data:
                     self.logger.info("Created TR: " + data['name'])
@@ -1346,7 +1224,6 @@ class Process_Test_Runs(object):
                   data = tr
           case _:
               self.system_exit('Error Unsupported Obj Type: ' + str(obj_type))
-
      return data
 
   def get_release(self,name=None):
@@ -1380,7 +1257,9 @@ if __name__ == '__main__':
     config = configparser.ConfigParser()
     config.read('config.ini')
     # Instance the Process Test Run Case
-
-    ptr = Process_Test_Runs()
-
     project = str(config['qtest']['project']) 
+    obj_data=[]
+    ptr = Process_Test_Runs()
+    data = ptr.get_obj_all("mhub242.2_618", None,obj_data,'test-runs')
+    print(data)
+
