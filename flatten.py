@@ -667,9 +667,10 @@ parser.add_argument('-txt_fctr', '--txt_flat_cyc_suite_tr', nargs=3, type=str, h
 
 
 sys.argv.append('--txt_flat_cyc_suite_tr')
-#sys.argv.append('./NV48/NV48_iptracker_final_list.txt')
-sys.argv.append('./Base/NV48_iptracker_single.txt')
+# sys.argv.append('./NV48/NV48_iptracker_single.txt')
 # sys.argv.append('./NV48/NV48_iptracker_final_list.txt')
+
+sys.argv.append('./Base/NV48_iptracker_single.txt')
 sys.argv.append(False)
 sys.argv.append('0')
 

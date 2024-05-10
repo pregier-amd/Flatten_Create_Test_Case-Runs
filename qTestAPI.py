@@ -389,7 +389,7 @@ class QtestAPI(object):
             self.endpoint = endpoint
         # defaults
         add_key=None
-        parameters=None
+        
         match tablename:
             case 'projects':
                 parameters = {'assigned':False}
@@ -401,6 +401,7 @@ class QtestAPI(object):
                 uri=None
                 # use qTest API to pull data
                 # get(server,uri,token,endpoint,parameters) if None use self.xxxx
+                endpoint = 'modules'
                 data = self.get(self.server, uri,None,endpoint,parameters)
             case 'requirement_test_cases':
                 uri=None
@@ -437,7 +438,7 @@ class QtestAPI(object):
         table_name = tablename + self.cfg['ssql']['suffix'] + '_trf'
         match table_name:
             # Do not extract the Link data.
-            case 'projects_API_trf' | 'releases_API_trf':
+            case 'projects_API_trf' | 'releases_API_trf' | 'project_modules_API_trf':
                 pass
             case _:
                 if 'links' in data[0]:

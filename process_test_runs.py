@@ -28,6 +28,7 @@ import time
 import urllib.parse
 import yaml
 import qTestAPI
+import modules
 
 class Process_Test_Runs(object):
   def __init__(self,logger = None, config =None, dateTStr=None ):
@@ -74,20 +75,33 @@ class Process_Test_Runs(object):
       
       self.qt = qtest.Qtest(project,self.logger, self.config)
       self.qta = qTestAPI.QtestAPI(self.config_fname)
-
-      # qTest API with Queues Multi threading
-      self.qta.project_id = self.qt.proj_id
+      self.md = modules.Modules(self.logger, self.config_fname)
 
       # Pull in the Project Data
       self.projects = self.qt.get_project(self.config['qtest']['project'])
       if( len(self.projects) < 1):
           mesg = 'ERROR: Project Not Found Exiting: ' + str(self.config['qtest']['project'])
           self.system_exit(mesg)
+            # qTest API with Queues Multi threading
+
+      self.set_project_id(self.qt.proj_id)
+
+
 
       # Test Case Class Variable
       # Dictionary of the tc = test Cases, tr=test_runs: { name:{data}, name2:{data}...}
       self.tcases =[]
       self.truns =[]
+
+  def set_project_id(self,project_id):
+      # qTest API with Queues Multi threading
+      self.qta.project_id = project_id
+      # Qtest Class
+      self.qt.proj_id = project_id
+      # Modules Class
+      self.md.project_id = project_id
+      # __file__ project_id
+      self.project_id = project_id
 
   def find_tc(self,name=None,id=None):
 
@@ -105,7 +119,7 @@ class Process_Test_Runs(object):
 
       #'test_case_version_id'
       #'test_steps'
-      fields = ["name","id","pid","parentId","properties"]
+      fields = ["name","id","pid","parent_id","properties"]
 
       if not body:
           match obj_type:
@@ -123,7 +137,8 @@ class Process_Test_Runs(object):
       # on error return the data.
 #     data = self.qt.search_body(body, obj_type='test-cases')
       for p in self.projects:
-          self.qta.project_id = p['id']
+          self.set_project_id(p['id'])
+
 #      data = self.qt.search_body_all(body, obj_type)
        #           search_object   (tablename='requirements',object_type='requirements',lastmodified=None,fields=None
       tablename = obj_type.replace("-", "_")
@@ -237,7 +252,17 @@ class Process_Test_Runs(object):
       else: 
           # use parent ID 
           try:
-             filt_obj = list(filter(lambda d: d['name'] == name and d['parentId'] == parentid ,obj_data ))
+              if 'parent_id' in obj_data[0]:
+                 filt_obj = list(filter(lambda d: d['name'] == name and d['parent_id'] == parentid ,obj_data ))
+              else:
+                  if 'parentid' in obj_data[0]:
+                     filt_obj = list(filter(lambda d: d['name'] == name and d['parentid'] == parentid ,obj_data ))
+                  else:
+                     if 'parentid' in obj_data[0]:
+                       filt_obj = list(filter(lambda d: d['name'] == name and d['parentid'] == parentid ,obj_data ))
+                     else:
+                         # No Parent.. Return 0 length
+                         filt_obj = []
           except Exception as e:
               self.logger.error("Filter Error: " + str(e) )
               self.logger.error("Filter Error: " + str(obj_type) + " name: " + name + " Parent ID: " + str(parentid) )
@@ -351,7 +376,24 @@ class Process_Test_Runs(object):
       self.expanded_data = self.expand_flat_data(flat_data,filename)
 
       # Process exec_data
-      # Expand the Test Case ID's write to  "*expanded"
+      # Validate the Sub IP, and IP fields
+      #must be populated for all rows with total variation > 0
+      field_remap_list = [{'Sub Ip':'Sub-IP Block'}]
+      qual_col = 'Total Variations'
+      obj_type_list = ['requirement','test-case']
+      #  Example: {'Sub Ip': None, 'Total Variations': 1}  Will fail because Sub IP must have a value.
+      if not self.check_fields(flat_data,field_remap_list,obj_type_list,qual_col):
+          # Unsupported Fields Exit.
+          sys.exit(0)
+      #Check that the IP has a valid Field Entry
+      field = "Ip"
+      value = self.ip 
+      for obj in obj_type_list:
+          if not self.qt.valid_field(field,value,obj):
+              # Unsupported Fields Exit.
+              sys.exit(0)
+
+
 
 # FIXXXX Debug Perform Create CYcle TR Etc..     
       self.process_exec_data_after_expanded(self.expanded_data,filename)
@@ -360,6 +402,36 @@ class Process_Test_Runs(object):
       self.write_excel(filename,self.expanded_data)
       
       return 
+  def check_fields(self,data=None,field_remap=None,obj_type_list=None,qual_col=None):
+      # Example: {'Sub Ip': None, 'Total Variations': 1}  Will fail because Sub IP must have a value.
+      # Find the Unique list of values for each column. with the qualifier col != None and != 0,
+#      data = list( filter(lambda d: d[qual_col] and self.to_int( d[qual_col]) > 0  , data ) )
+       result = True
+       outdata= {}
+       for remap in field_remap:
+          for field in remap:
+              cnt = 1
+              for d in data:
+                   # unique list of Values for the Columns in 
+                   outdata[field] = set([ d[remap[field] ] for d in data])
+
+                   #Check for invalid fields
+                   if  (not d[remap[field]] or d[remap[field]] == '' ) and  self.to_int( d[qual_col]) > 0:
+                       self.logger.error("Row: " + str(cnt) + "row[" + qual_col + "] is invalid Must have a Value.")
+                       result = False
+                   cnt += 1
+          # Check th eUnique Values and COnfirm that there is an Entry in the Field for hte Obj.. Ie. Field[Sub IP]=MHUB     For new Sub IP's an entry will be needed.
+          for field in outdata:
+               for value in outdata[field]:
+                   for obj in obj_type_list:
+                       # check tha the Filed is supported in the both the Requirements, and Test Cases
+                       if not self.qt.valid_field(field,value,obj) :
+                           self.logger.error("Invalid Entry for " + "Type: " + obj + " \"" + str(field) + "\"[" + str(value) + "]" )
+                       else:
+                           self.logger.error("Valid Entry for " + "Type: " + obj + " \""  + str(field) + "\"[" + str(value) + "]" )
+
+
+       return result
 
   def append_suffix(self,inputfile=None,suffix=None,extension=".xlsx",addtime=True):
       self.filebase = os.path.splitext(inputfile)[0]
@@ -429,6 +501,18 @@ class Process_Test_Runs(object):
 
       return self.first_expanded_row
 
+  def get_module_id(self,module):
+        # get the First Element or None if Empty
+        d = None
+        if isinstance(module,list):
+            for m in module:
+               if 'id' in m:
+                   d = m['id']
+        else:
+            if isinstance(module,dict):
+                   d = module['id']
+        return d
+
 
 
   def process_exec_data_after_expanded(self,data,filename=None):
@@ -440,6 +524,18 @@ class Process_Test_Runs(object):
       else:
           self.first_expanded_row = 0
 
+      #name of the First Module
+      if self.config['qtest']['project_module_name']:
+          # Set the Project Module:
+          #  I.e. NV4X, NV48, MI3XX  or Blank for none.  
+          name = self.config['qtest']['project_module_name']  
+          parent={} 
+          parent['id'] = None #Always at the Root of Project.
+          # See it is already present if not Create it. Using Name. 
+          self.project_module = self.md.find_create(parent,name,True)
+      else:
+          self.project_module = {'id': None, 'name': None}
+
       # For each of the Rows 
       cnt = 0
       variations = 0
@@ -449,14 +545,51 @@ class Process_Test_Runs(object):
               cnt = cnt+1
               continue
 
-          
-          # Debug
-          #planned = self.config['dates']['pre_silicon_planned']
-          #planned_str = datetime.strftime(self.format_eta(planned,"wk2"),"%Y-%m-%dT%H:%M:%S%z")
-          #print(planned_str)
+          # Populate Modules:
+          # config[module][root]  if None then use the Project Root
+          # config[module][root]  if Module Top Such as NV4X/NV44/NV48
+          parent={'id': self.get_module_id(self.project_module) }
 
-          #Debug
-          # End of debug
+          #IP Extracted from the File name "<Project>_<ip...>_Diags.. .xlsx"
+          if self.ip:
+              name = self.ip
+          else:
+              self.logger.error("No IP found, Exiting:  Filename: <project>_<IP>_Diagnostics.......xlsm")
+
+          # Create the Module for IP
+          self.ip_module  = self.md.find_create(parent,name,True)
+
+          # Check if IP Module exits (find_create_module, parent={'name':'xxxx','id'=yyyy}config[module][root],name= self.ip, current_mod = self.md.ip )
+          # if not self.md.ip:
+          #    if Module matching hte Search Search self.md.module_list for name = self.ip = created IP Module
+          #    self.md.ip = returned object,
+          #    if needed create Module using config[module][root] as parent, with name self.ip
+          #    self.md.ip = created IP Module
+
+          # 
+          # Check if SUB_IP Module exits (find_create_module, parent=self.md.ip,name= row['Sub-IP Block'], existing = self.md.sub_ip )
+          # if not self.md.sub_ip['name'] == row['Sub-IP Block']
+          #    create Module using self.md.ip as parent, with name from row['Sub-IP Block']
+
+          # Must be a String, and it must be in the test-case['Sub ip']
+          #Sub IP Column has been validated as having entries in hte test-cases['Sub Ip'] field.
+          sub_ip = row['Sub-IP Block']
+
+          if sub_ip and not sub_ip =='':
+              parent={'id': self.get_module_id(self.ip_module) }
+
+              #Sub P Extracted from the Current Row[Sub-IP Block]"
+              name = sub_ip
+              self.sub_ip_module  = self.md.find_create(parent,name,True)
+          else:
+              # invalid Sub IP. Skip the Row.
+              self.logger.error("Error: Skipping Row, Invalid Sub Ip: \"" + str(sub_ip) + "\"" )
+              continue
+          
+          # Requirement Populate  Todo 
+
+          # Test Case Populate
+       
           #    Pre-Silicon and Post Silicon Entry Puts these in Different Releases.
           # Get the Current create / get test_cycle Name is IP
           # Get the Current create / get test_suite  Name is in row['Sub-IP Block']
@@ -860,6 +993,9 @@ class Process_Test_Runs(object):
              self.enable_tr_msg = "No Variations"
       self.logger.info("enabled_tr: " + str(enabled) )
       return enabled
+  def clean_str(self,input):
+      #remove Leading / trailing Strings
+      return str(input).strip()
 
   def make_qtest_objs(self,rel,row,cnt,pre_flag):
         #Create the Test-Cycles, Test-Suites, Test-Runs
@@ -896,29 +1032,36 @@ class Process_Test_Runs(object):
         self.ts = self.create_find(row['Sub-IP Block'],'test-suite',self.qtest_dict[release][cycle],parent)
         suite = self.ts['name']
 
-        # Populate test-run if needed.
-        tr_name = str(row['Test Case ID']) + "_" +  str(cnt)
-        self.logger.info("Create: Test Run ID: " + str(tr_name) )
-        
         # if not self.lookup_data(self.tr,tr_name):
         #    pass
         # Find the Test Case
         # enabled to Be entered in the Pre/Post Release
-        parent = self.ts
+        
 
-        # check for Test Case  Create Test Case if needed.          
-        self.tc = self.find_tc(row['Test Case ID'])
+  
         # For Test Run Planning Dates.
         properties={}
-        properties["Ip"]          = self.ip
-        properties["Sub Ip"]      = row['Sub-IP Block']
-        properties["Framework"]   = row['Framework']
-        self.tc = self.create_find(row['Test Case ID'],'test-case',self.qtest_dict[release][cycle][suite],parent,self.tc,properties) 
+        properties["Ip"]          = self.clean_str(self.ip)
+        properties["Sub Ip"]      = self.clean_str(row['Sub-IP Block'])
+        properties["Test Case Framework"]   = self.clean_str(row['Framework'])
+
+        # Place the Test Case in the Current Module (sub Ip)
+        for i in self.sub_ip_module:
+            if 'id' in i:
+               parent = i
+#               parent['id'] = i['id']
+            else:
+                # Invalid SUb IP Module
+                self.logger.error("Invalid Sub IP Module: " + str(self.get_module_id(self.sub_ip_module) ) )
+        # check for Test Case  Create Test Case if needed.          
+#        self.tc = self.find_tc(row['Test Case ID'])
+        self.tc = self.create_find(row['Test Case ID'],'test-case',self.qtest_dict[release][cycle][suite],parent,None,properties) 
 
         if not self.tc:
             # No Test Case:
             self.logger.error("No Test Case Found: " + row['Test Case ID'] + " Skipped Row: " + str(cnt) + "\n Needs to be added to Test Design Tab:" )
-            self.tc['name'] = "Not Found"
+            self.logger.error("Sub IP: " + str(self.sub_ip_module) )
+            self.tc['name'] = "Not Found"            
             self.test_run ={}
             self.test_run_log ={}
             self.update_audit(row,pre_flag)
@@ -934,6 +1077,10 @@ class Process_Test_Runs(object):
             self.update_audit(row,pre_flag)
             return None
 
+        # Populate test-run if needed.
+        tr_name = str(row['Test Case ID']) + "_" +  str(cnt)
+        self.logger.info("Create: Test Run ID: " + str(tr_name) )
+        
         self.logger.info("For tr Name: "+ tr_name +" Use Test Case: " + str(self.tc['name']) )
 
         # if a Test Case Has been Found Create the Test Run:
@@ -955,7 +1102,7 @@ class Process_Test_Runs(object):
         properties["planned_start"] = planned_str
         properties["planned_end"]   = planned_str
 
-        self.test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,self.tc,properties)                                
+        self.test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],self.ts,self.tc,properties)                                
         self.logger.info("TR Row: " + str(cnt) + "\tRL: " + str(release) + "\tCL: " + str(cycle) + "\tTS: " + str(suite) + "\tTR: " + str(tr_name)  + " Properties: " + str(properties) )
         self.logger.info("Test Case: " + str(self.tc['id']) )
 
@@ -1004,7 +1151,7 @@ class Process_Test_Runs(object):
         tl_row                = self.format_run_log(row,pre_flag,self.tc,None,date_dict)
 
         # Create Run Log
-        if self.config['qtest']['create_test_log_flag'] == "True":
+        if self.config['qtest']['create_test_run_log_flag'] == "True":
             create_enable = True
         else:
             create_enable = False
@@ -1218,7 +1365,10 @@ class Process_Test_Runs(object):
            for rl in data:
                name = rl['name']
                # populate using format release 'rl'
-               self.qtest_dict[name] = self.populate_format('rl',rl)
+               releases = self.populate_format('rl',rl)
+               if not releases:
+                    releases = []  #save an Empty list if needed.
+               self.qtest_dict[name] = releases
                self.logger.debug('Found Release: ' + str( self.qtest_dict[name] ) )
        return self.qtest_dict[name]
 
@@ -1258,9 +1408,9 @@ class Process_Test_Runs(object):
               # if self.tr is empty read all from Project and populdate self.tr
               match obj_type:
                  case 'test-case':
-                    obj = self.lookup_data(self.tcases,obj_type,name,qtest_dict['id'])
-                 case 'test-run':
-                    obj = self.lookup_data(self.truns,obj_type,name,qtest_dict['id'])
+                    obj = self.lookup_data(self.tcases,'test-cases',name,qtest_dict['id'])
+#                 case 'test-run':
+#                    obj = self.lookup_data(self.truns,obj_type,name,qtest_dict['id'])
 
               if not obj:
                   obj = {}
@@ -1283,9 +1433,9 @@ class Process_Test_Runs(object):
                 # New Test-Cycle add it to the Dictionary.
                 # Create or Read CL Obj Return data:
                  
-                data = self.qt.find_create_obj(name,obj_type,parent['id'],tc,properties,create_enable)
+                data = self.qt.find_create_obj(name,obj_type,parent['id'],None,properties,create_enable)
                 if 'name' in data:
-                    self.logger.info("Created " + str(obj_type) + "Name: " + data['name'])
+                    self.logger.info("Created " + str(obj_type) + " Name: " + data['name'])
                 else:
                     self.logger.info("Created " + str(obj_type) + " Generic")
 
@@ -1295,11 +1445,11 @@ class Process_Test_Runs(object):
                         match obj_type:
                             case 'test-case':
                                 self.tcases.append(data)
-                            case 'test-case':
+                            case 'test-run':
                                 self.truns.append(data)
                 else:
                     self.logger.error("Error Content: " + str(data))
-                    self.logger.error("ERROR: Failed to create " + str(obj_type) + " Name: " + str(name) + "\n Parent ID: " + parent['id'] + "\n TC: " + str(tc) + "\n Properties: " + str(properties))
+                    self.logger.error("Error: Failed to create " + str(obj_type) + " Name: " + str(name) + "\n Parent ID: " + parent['id'] + "\n TC: " + str(tc) + "\n Properties: " + str(properties))
                     self.logger.error("Error Content: " + str(data.content))
               else:
                   data = obj
@@ -1384,3 +1534,9 @@ if __name__ == '__main__':
     ptr = Process_Test_Runs()
 
     project = str(config['qtest']['project']) 
+
+    d =  ptr.qt.valid_field('Sub Ip','MMHUB','requirement')
+    d =  ptr.qt.valid_field('Sub Ip','MMHUBrrrrr','test-case')
+    d =  ptr.qt.valid_field('Sub Ip','ATHUB','requirement')
+
+    print (d)

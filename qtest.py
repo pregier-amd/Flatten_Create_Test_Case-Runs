@@ -50,6 +50,7 @@ class Qtest(object):
 
   def get_request(self,endpoint,params=None,body=None,headers=None):
       return self.request('get',endpoint,params,body,headers)
+    
 
   def post_request(self,endpoint,params=None,body=None,headers=None):
       return self.request('post',endpoint,params,body,headers)
@@ -140,16 +141,16 @@ class Qtest(object):
          response = requests.post(url,headers=headers, json = body, params = params)
       if meth == 'put':
          response = requests.put(url,headers=headers, json = body, params = params)
-
+      
       if(response.status_code >= 300):
-          logging.warning("Request Response Status: " + str(response.status_code) )
-          logging.warning("Request Response Content: " + str(response.content) )
-          logging.warning("url: " + url + " headers: " + str(headers) + " params: " + str(params) + " body: " + str(body) )
+        logging.warning("Request Response Status: " + str(response.status_code) )
+        logging.warning("Request Response Content: " + str(response.content) )
+        logging.warning("url: " + url + " headers: " + str(headers) + " params: " + str(params) + " body: " + str(body) )
 
       if(response.status_code < 300):
-           data = response.json()
+        data = response.json()
       else:
-           data = response
+         data = response
 
       return data
 
@@ -194,6 +195,7 @@ class Qtest(object):
     filt_obj = list(filter(lambda d: d['label'] == field_label ,obj_data[obj_type] ))
     return filt_obj
 
+  
   def get_project(self,projectname=None):
       data = self.get_request('projects')
       if not projectname:
@@ -243,7 +245,7 @@ class Qtest(object):
       if(not body):
           body={ "object_type": obj_type, "fields": ["*"],"query": "name = " + '%' }
       
-      params = None
+      params = {'appendTestSteps': True}
       # Uses Page and Page Size
       data = self.post_request_all(endpoint,params,body)
       return data
@@ -259,7 +261,7 @@ class Qtest(object):
       if(not body):
           body={ "object_type": obj_type, "fields": ["*"],"query": "name = " + '%' }
       
-      params = None
+      params = {'appendTestSteps': True}
       data = self.post_request(endpoint,params,body)
       return data
 
@@ -292,6 +294,21 @@ class Qtest(object):
   def href(self,link=None,text=None):
       return "<a href=\"" + str(link) + "\"" + ">" + text + "<a>"
 
+  def create_module(self,parent=None,name=None,properties=None):
+      # row ['test case name']
+      # row['start_datetime']
+      # row['step_description']
+      body = self.frmt_create_module(parent,name)
+      # format the Body to create a test case
+      # Add Properties
+      if properties:
+            body["properties"] = properties
+          
+      logging.debug("Create Module Body: " + str(body) )
+      endpoint = 'projects/' + str(self.proj_id) + '/' + 'modules'
+      data = self.post_request(endpoint,None,body,None)
+      return data
+
   def create_test_case(self,config=None,row=None,parent_id=None,properties=None):
       # row ['test case name']
       # row['start_datetime']
@@ -309,10 +326,10 @@ class Qtest(object):
             {
  
               "id": 1,
-              "description": "",
+              "description": str(row['test case name']).strip(),
               "expected": "Run to Conclusion, Does not Fail (MCA, or Functional), Does Not Hang Either Soft or Hardlock",
               "order": 1,
-              "group": 0,
+              "group": 1,
               "parent_test_step_id": 0
               }
           ],
@@ -330,7 +347,8 @@ class Qtest(object):
           
       logging.debug("Create Test Case Body: " + str(body) )
       endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-cases'
-      data = self.post_request(endpoint,None,body,None)
+      parameters={'expandSteps': True}
+      data = self.post_request(endpoint,parameters,body,None)
       return data
 
   def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None,properties_list=None,create=True):
@@ -380,7 +398,7 @@ class Qtest(object):
 
           case 'test-case':
               endpoint = 'projects/' + str(self.proj_id) + '/' + 'test-cases'
-              params = {'parentId': parentId, 'parentType': 'test-suite'}
+              params = {'parentId': parentId, 'parentType': 'module','expandSteps': True  }
  
               # Search
               data = self.get_request(endpoint,params,None,None)
@@ -457,13 +475,21 @@ class Qtest(object):
                outdata['field_value']      = str(value)
       return outdata
 
+  def valid_field(self,field=None,value=None,obj_type='test-case'):
+      data = {field: value}
+      outdata= self.format_properties(data,obj_type)
+      result = True
+      if len(outdata) == 0:
+          result = False
+      return result
+
   def format_properties(self,data=None,obj_type=None):
       outdata = []
       for prop in data:
           #Returns [{field}]
           fields= self.lookup_fields(obj_type,prop)
           if len(fields) > 0:
-              self.logger.info("Format_Properties[" + str(prop) +  "]:" + str(data[prop]))
+              self.logger.debug("Format_Properties[" + str(prop) +  "]:" + str(data[prop]))
 #              d = field['field_value']= data[prop]
               value = data[prop]
               for field in fields:
@@ -475,6 +501,8 @@ class Qtest(object):
                       allowed = self.filter_allowed_values(str(data[prop]).strip(),field['allowed_values'])
                       if len(allowed) < 1 :
                           self.logger.error("Error: Custom Field Not Supported for: \"" + str(obj_type) + "\" To Fix: Add value to Field List: Not an Allowed Value: \"" + str(prop) + "\"[" + str(data[prop]) + "]")
+                          # Skip the Field invalid Value.
+                          continue
 #                          raise "Exception Custom Field Not Supported!"
                       else:
                           # For allowed Values Version name and values must be lists.
@@ -528,6 +556,30 @@ class Qtest(object):
               "test-cycles": [ ]
           }
       return body
+
+  def frmt_create_module(self,parent=None,name=None ):
+      body = {
+              "name": name,
+              "order": 9,
+    #          "created_date": "2024-05-02T17:38:10.107Z",
+    #          "last_modified_date": "2024-05-02T17:38:10.107Z",
+    #          "description": "Description of Module 1",
+              "shared": False,
+              "projects_shared_to": [
+                0
+              ],
+              "children": [
+                None
+              ],
+              "recursive": False
+            }
+      # Append a valid Parent ID to Boddy
+      if 'id' in parent:
+          if parent['id'] and not parent['id'] == '':
+                body["parent_id"] = parent['id']
+      return body
+
+
   def frmt_create_testcase(self,row):
         # format the Body to create a test case
         body = {
@@ -818,7 +870,7 @@ class Qtest(object):
 
     # Add Project 
     # Disabled for checkin
-#    project = str(config['qtest']['project']) 
+    project = str(config['qtest']['project']) 
       
     qt = qtest.Qtest(project,None,config)
     qt.proj_id = 130320
