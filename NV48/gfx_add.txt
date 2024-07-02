@@ -1,3 +1,0 @@
-
-ADD:  gfx.cmm_sa_access_order_monolithic1.22   TNG
-ADD: txi93.4,7
