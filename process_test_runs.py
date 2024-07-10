@@ -470,7 +470,7 @@ class Process_Test_Runs(object):
       # filename = data[0],exec_tr = data[2]
       logging.info("Data: " + str(data) )
       filename     = data[0]
-      self.exec_tr = data[1]
+      self.exec_tr = False #data[1]
       #Each Row in the input File
       # Cycle Name row['Sub-IP Block']
       # Cycle Name row['Sub-IP Block']
@@ -1204,6 +1204,10 @@ class Process_Test_Runs(object):
         # For Test Run Planning Dates.
         properties={}
         properties["Ip"]                    = self.clean_str(self.ip)
+        for k in ['Sub-IP Block','Framework']:
+            if not k in row:
+                self.logger.error("Needed Column: " + str(k) + "Not in Row Data.")
+                raise
         properties["Sub Ip"]                = self.clean_str(row['Sub-IP Block'])
         properties["Test Case Framework"]   = self.clean_str(row['Framework'])
 
