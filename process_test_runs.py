@@ -964,8 +964,7 @@ class Process_Test_Runs(object):
   def create_qtest_entries(self,row,cnt,module):
       # Loop Releases / Pre / Post silicon
 # Disable 
-#      for rel in ['pre','post']:        
-      for rel in ['post']:        
+      for rel in ['pre','post']:        
           match rel:
               case 'pre':
                   pre_flag = True
