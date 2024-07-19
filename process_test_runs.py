@@ -1209,7 +1209,7 @@ class Process_Test_Runs(object):
                 raise
         properties["Sub Ip"]                = self.clean_str(row['Sub-IP Block'])
         properties["Test Case Framework"]   = self.clean_str(row['Framework'])
-
+        
 
  
 
@@ -1223,7 +1223,8 @@ class Process_Test_Runs(object):
 
         # check for Test Case  Create Test Case if needed.          
 #        self.tc = self.find_tc(row['Test Case ID'])
-        self.tc = self.create_find(row['Test Case ID'],'test-case',self.qtest_dict[release][cycle][suite],parent,None,properties) 
+        parameters=self.clean_str(row['Parameters'])
+        self.tc = self.create_find(row['Test Case ID'],'test-case',self.qtest_dict[release][cycle][suite],parent,None,properties,parameters) 
 
         if not self.tc:
             # No Test Case:
@@ -1550,7 +1551,7 @@ class Process_Test_Runs(object):
                self.logger.debug('Found Release: ' + str( self.qtest_dict[name] ) )
        return self.qtest_dict[name]
 
-  def create_find(self,name, obj_type='test-cycle', qtest_dict={},parent=None,tc=None,properties=None):     
+  def create_find(self,name, obj_type='test-cycle', qtest_dict={},parent=None,tc=None,properties=None,parameters=None):     
      data = {}
      new = False
      match obj_type:
@@ -1615,9 +1616,6 @@ class Process_Test_Runs(object):
                     self.logger.error("Failed to Create: " + str(obj_type) + " Name: " + str(name) + "Module: " + str(parent['id']))
  
             return data
-
-              
-
         case 'test-case':
               # Check for Key 'test-suite' in release.
               # if the key is present then there is a Test Case.
@@ -1649,7 +1647,7 @@ class Process_Test_Runs(object):
                 # New Test-Cycle add it to the Dictionary.
                 # Create or Read CL Obj Return data:
                  
-                data = self.qt.find_create_obj(name,obj_type,parent['id'],None,properties,create_enable)
+                data = self.qt.find_create_obj(name,obj_type,parent['id'],None,properties,create_enable,parameters)
                 if 'name' in data:
                     self.logger.info("Created " + str(obj_type) + " Name: " + data['name'])
                 else:

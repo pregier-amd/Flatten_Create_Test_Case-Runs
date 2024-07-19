@@ -347,7 +347,7 @@ class Qtest(object):
             {
  
               "id": 1,
-              "description": str(row['test case name']).strip(),
+              "description": str(row['test case name']).strip() + " " + str(row['parameters']).strip(), 
               "expected": "Run to Conclusion, Does not Fail (MCA, or Functional), Does Not Hang Either Soft or Hardlock",
               "order": 1,
               "group": 1,
@@ -372,7 +372,7 @@ class Qtest(object):
       data = self.post_request(endpoint,parameters,body,None)
       return data
 
-  def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None,properties_list=None,create=True):
+  def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None,properties_list=None,create=True,parameters=None):
 
       match obj_type:
           case 'test-cycle':
@@ -461,7 +461,7 @@ class Qtest(object):
                   row['test case name'] = name
                   now = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
                   row['start_datetime'] = now
-
+                  row['parameters']     = parameters
                   properties = self.format_properties(properties_list,obj_type)
 
                   # Create the Test Case if not Present                 
