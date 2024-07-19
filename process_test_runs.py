@@ -1626,7 +1626,8 @@ class Process_Test_Runs(object):
               # if self.tr is empty read all from Project and populdate self.tr
               match obj_type:
                 case 'test-case':
-                  obj = self.lookup_data(self.tcases,'test-cases',name,qtest_dict['id'])
+#                  obj = self.lookup_data(self.tcases,'test-cases',name,qtest_dict['id'])
+                  obj = self.lookup_data(self.tcases,'test-cases',name,parent['id'])
                   if not obj:
                       obj = {}
 
