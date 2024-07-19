@@ -435,15 +435,19 @@ class Process_Test_Runs(object):
                        result = False
                    cnt += 1
           # Check th eUnique Values and COnfirm that there is an Entry in the Field for hte Obj.. Ie. Field[Sub IP]=MHUB     For new Sub IP's an entry will be needed.
+          invalid = []
           for field in outdata:
                for value in outdata[field]:
                    for obj in obj_type_list:
                        # check tha the Filed is supported in the both the Requirements, and Test Cases
                        if not self.qt.valid_field(field,value,obj) :
-                           self.logger.error("Invalid Entry for " + "Type: " + obj + " \"" + str(field) + "\"[" + str(value) + "]" )
+                           msg ="Invalid Entry for " + "Type: " + obj + " \"" + str(field) + "\"[" + str(value) + "]"
+                           self.logger.error(msg)
+                           invalid.append(msg)
                        else:
                            self.logger.error("Valid Entry for " + "Type: " + obj + " \""  + str(field) + "\"[" + str(value) + "]" )
-
+          if len(invalid) > 0:
+              sys.exit()
 
        return result
 
