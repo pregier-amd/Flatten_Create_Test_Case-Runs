@@ -330,12 +330,17 @@ class Qtest(object):
       data = self.post_request(endpoint,parameters,body,None)
       return data
 
-  def create_test_case(self,config=None,row=None,parent_id=None,properties=None):
+  def create_test_case(self,config=None,row=None,parent_id=None,properties=None,iptracker_row=None):
       # row ['test case name']
       # row['start_datetime']
       # row['step_description']
 
       # format the Body to create a test case
+      name_description = "Stress or Functional Test"
+      if iptracker_row:
+          if 'Test Name / Description' in iptracker_row:
+              if iptracker_row['Test Name / Description']:
+                  name_description = iptracker_row['Test Name / Description']
       body = {
           "id": 1,
           "name": row['test case name'],
@@ -355,7 +360,8 @@ class Qtest(object):
               }
           ],
           "parent_id": parent_id,
-          "description": "Stress or Functional Test, ",
+
+          "description": name_description,
           "precondition": "Configured OS, DREX, ,TNG Release Configured.",
           "creator_id": config['qtest']['creator_id'],
           "agent_ids": [
@@ -372,7 +378,7 @@ class Qtest(object):
       data = self.post_request(endpoint,parameters,body,None)
       return data
 
-  def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None,properties_list=None,create=True,parameters=None):
+  def find_create_obj(self,name=None,obj_type='test-cycle',parentId=None,tc=None,properties_list=None,create=True,parameters=None,iptracker_row=None):
 
       match obj_type:
           case 'test-cycle':
@@ -465,7 +471,7 @@ class Qtest(object):
                   properties = self.format_properties(properties_list,obj_type)
 
                   # Create the Test Case if not Present                 
-                  data = self.create_test_case(self.config,row,parentId,properties)
+                  data = self.create_test_case(self.config,row,parentId,properties,iptracker_row)
                   # Approve the Test Case
                   if 'id' in data:
                       test_case = self.approve_tc(data['id'])
