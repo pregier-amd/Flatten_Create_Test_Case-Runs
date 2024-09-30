@@ -5,6 +5,7 @@ from ipaddress import v4_int_to_packed
 import re
 import sys,os
 from telnetlib import IP
+from typing import dataclass_transform
 #from typing import self
 import requests
 import math
@@ -489,11 +490,31 @@ class Process_Test_Runs(object):
         case "_":
                 self.logger.info("File type Not Supported: " + str(filename) )
       return data
+  def get_input(self,msg=None):
+      data = None
+      if msg:
+          while not data:
+              data = input(msg)
+              if not str(data).strip():
+                 msg = "Blank input try again."
+      return data
+
 
   def download_file(self,link=None, directory=None):
       filename = os.path.basename(link)
       filename  = urllib.parse.unquote(filename)
-      cmd = 'cd ' + directory + "&" + 'curl --ntlm -u ' + self.config['creds']['user'] + ":" + self.config['creds']['password'] + " -o " + "\"" + filename + "\""
+      user = self.config['creds']['user']
+      password = self.config['creds']['user']
+
+      if not user:
+          msg = "To download tracker Enter \"User Name i.e.<pregier>\""
+          user = self.get_input(msg)
+
+      if not password:
+          msg = "To download tracker Enter \"User pasword\"" 
+          user = get_input(msg)
+
+      cmd = 'cd ' + directory + "&" + 'curl --ntlm -u ' + user + ":" + password + " -o " + "\"" + filename + "\""
       cmd = cmd + " " + link
 
       path = os.path.dirname(__file__)

@@ -73,20 +73,33 @@ class Process_Test_Runs(object):
       return logging.getLogger('logger')
 
   def init_qtest(self):
-      project = self.config['qtest']['project']
-      
-      self.qt = qtest.Qtest(project,self.logger, self.config)
+      # Project
+      # Set Class Variables to support CLI overwrite
+      # WHen Creating Test Executions Use hte UU date as the taget Date
+      # Delay N Weeks and use the UU date + N Weeks for the Start Date for Post Silicon Validation 
+
+      self.project = self.config['qtest']['project']
+      self.uu_date = self.config['dates']['pre_silicon_planned']
+      self.project_module_name = self.config['qtest']['project_module_name']
+
+#      self.post_wk1_date = self.config['dates']['post_week1']
+      self.post_wk1_date = self.add_to_date(self.uu_date,2,None,"%Y-%m-%dT%H:%M:%S%z")
+
+      self.qt = qtest.Qtest(self.project,self.logger, self.config)
       self.qta = qTestAPI.QtestAPI(self.config_fname)
       self.md = modules.Modules(self.logger, self.config_fname)
 
+      # Pull the Project Inormation from qTest
+      self.set_project(self.project)
+
       # Pull in the Project Data
-      self.projects = self.qt.get_project(self.config['qtest']['project'])
-      if( len(self.projects) < 1):
-          mesg = 'ERROR: Project Not Found Exiting: ' + str(self.config['qtest']['project'])
-          self.system_exit(mesg)
+#      self.projects = self.qt.get_project(self.config['qtest']['project'])
+#      if( len(self.projects) < 1):
+#          mesg = 'ERROR: Project Not Found Exiting: ' + str(self.config['qtest']['project'])
+#          self.system_exit(mesg)
             # qTest API with Queues Multi threading
 
-      self.set_project_id(self.qt.proj_id)
+#      self.set_project_id(self.qt.proj_id)
 
 
 
@@ -95,6 +108,31 @@ class Process_Test_Runs(object):
       self.requirements =[]
       self.tcases =[]
       self.truns =[]
+
+  def set_project(self,project_str=None):
+      print(project_str)
+      self.projects = self.qt.get_project(project_str)
+      if( len(self.projects) < 1):
+          mesg = 'ERROR: Project Not Found Exiting: ' + str(self.config['qtest']['project'])
+          self.system_exit(mesg)
+            # qTest API with Queues Multi threading
+
+      self.set_project_id(self.qt.proj_id)
+
+
+  def set_uudate(self,uu_date=None,format="%Y-%m-%dT%H:%M:%S%z"):
+      self.uu_date = uu_date
+      self.post_wk1_date = self.add_to_date(self.uu_date,2,None,format)
+      self.logger.info("Post Silicon Start Date: " + str(self.post_wk1_date))
+      return
+
+  def add_to_date(self,date_str=None,wk=None,day=None,format=None):
+      data = datetime.strptime(date_str, format)
+      if wk:
+          data = data + timedelta(weeks = wk)
+      if day:
+          data = data + timedelta(days = day)
+      return data 
 
   def set_project_id(self,project_id):
       # qTest API with Queues Multi threading
@@ -543,10 +581,13 @@ class Process_Test_Runs(object):
           self.first_expanded_row = 0
 
       #name of the First Module
-      if self.config['qtest']['project_module_name']:
+#      if self.config['qtest']['project_module_name']:
+      if self.project_module_name:
           # Set the Project Module:
           #  I.e. NV4X, NV48, MI3XX  or Blank for none.  
-          name = self.config['qtest']['project_module_name']  
+#          name = self.config['qtest']['project_module_name']
+          name = self.project_module_name
+          
           parent={} 
           parent['id'] = None #Always at the Root of Project.
           # See it is already present if not Create it. Using Name. 
@@ -675,7 +716,7 @@ class Process_Test_Runs(object):
   def download_file(self,link=None, directory=None):
       filename = os.path.basename(link)
       filename  = urllib.parse.unquote(filename)
-      cmd = 'cd ' + directory + "&" + 'curl --ntlm -u ' + self.config['creds']['user'] + ":" + self.config['creds']['password'] + " -o " + "\"" + filename + "\""
+      cmd = 'cd ' + directory + "&" + 'curl -w \"status:%{http_code}\" --ntlm -u ' + self.config['creds']['user'] + ":" + self.config['creds']['password'] + " -o " + "\"" + filename + "\""
       cmd = cmd + " " + link
 
       path = os.path.dirname(__file__)
@@ -684,9 +725,27 @@ class Process_Test_Runs(object):
 
       # data = subprocess.check_output(['cd' , directory,";", cmd,";","cd .."])
       result = subprocess.getoutput(cmd)
+      status = self.check_curl_status(result)
+      if not self.passing_curl_status(status):
+          self.logger.error("Failed to read File: " + str(link))
+          self.logger.error("Failing Curl Result Info: " + str(result))
+          sys.exit()
       self.logger.info("download_file Result: " + str(result) )
       return result
+ 
+  def passing_curl_status(self,status=None):
+      result = True
+      if not re.match('.*20.*',status):
+        result = False
+      return result
 
+  def check_curl_status(sel,data=None):
+      for line in data.split():
+          m = re.match('.*status:(.*).*',line)
+          if m:
+              return m[1]
+      # return none on error
+      return 
   def save_progress(self,filename=None,data=None):
       # Save Progress 
       return self.write_txt_file(filename,data)
@@ -978,7 +1037,7 @@ class Process_Test_Runs(object):
                   else:
                       self.logger.info("Not Enabled for Pre Sil: " + "Row: " + str(cnt) + " Name: " + row['Test Case ID'] )
               case 'post':
-                  pre_flag = False
+                  pre_flag =False
                   # All Rows, if total Variations > 0                  
                   if row['Total Variations'] > 0 :
                       self.make_qtest_objs(rel,row,cnt,pre_flag,module)
@@ -1021,7 +1080,7 @@ class Process_Test_Runs(object):
        if isinstance(task_id,float):
            task_list = [task_id]
        else:
-            task_list = re.split(',|\n|\r\n',task_id )
+            task_list = re.split(',|\n|\r\n',str(task_id) )
        for task_id in task_list:
             if not task_id:
                 continue
@@ -1209,8 +1268,8 @@ class Process_Test_Runs(object):
         properties["Ip"]                    = self.clean_str(self.ip)
         for k in ['Sub-IP Block','Framework']:
             if not k in row:
-                self.logger.error("Needed Column: " + str(k) + "Not in Row Data.")
-                raise
+                self.logger.error("Needed Column: " + str(k) + " Not in Row Data.")
+                sys.exit()
         properties["Sub Ip"]                = self.clean_str(row['Sub-IP Block'])
         properties["Test Case Framework"]   = self.clean_str(row['Framework'])
         
@@ -1254,7 +1313,9 @@ class Process_Test_Runs(object):
             self.test_run['name'] = self.enable_tr_msg 
             self.test_run_log ={}
             self.update_audit(row,pre_flag)
-            return None
+# Stops at checking for Pre-SIlicon
+# Needs to continue to do Post Silicon
+#            return None
 
         # Populate test-run if needed.
         tr_name = str(row['Test Case ID']) + "_" +  str(cnt)
@@ -1266,13 +1327,17 @@ class Process_Test_Runs(object):
         # test_run = self.create_find(tr_name,'test-run',self.qtest_dict[release][cycle][suite],parent,tc)
         #qtest_dict[] not used
         if pre_flag:
-           planned = self.config['dates']['pre_silicon_planned']
+            self.logger.info("PreSilicon Date: " + str(self.uu_date))
+            planned = self.uu_date
+#           planned = self.config['dates']['pre_silicon_planned']
+
            # Pre Silicon do not use the ETA column
-           planned_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z") 
+            planned_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z") 
         else:
-           planned = self.config['dates']['post_week1']
-           # Eta WK * 7 days Use the ETA Column for the PLanned Information
-#           planned_str = datetime.strftime(self.format_eta(planned,row['ETA']),"%Y-%m-%dT%H:%M:%S%z") 
+           planned = self.post_wk1_date
+           self.logger.info("PreSilicon Date: " + str(self.post_wk1_date))
+#           planned = self.config['dates']['post_week1']
+
            # Run at Start Date.
            planned_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z") 
 
@@ -1436,9 +1501,11 @@ class Process_Test_Runs(object):
       outrow['runlog'] ="https://Execution/*.log"
       # True == Presilicon
       if pre_flag:
-          planned = self.config['dates']['pre_silicon_planned']
+#          planned = self.config['dates']['pre_silicon_planned']
+          planned = self.post_wk1_date
       else:
-          planned = self.config['dates']['post_week1']
+#          planned = self.config['dates']['post_week1']
+          self.post_wk1_date
           # week1 + Eta WK * 7 days
 
       outrow["planned_exe_time"]   = 1

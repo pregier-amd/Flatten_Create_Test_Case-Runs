@@ -26,7 +26,7 @@ class Flatten(object):
       self.dateTStr = self.dateTimeString(None)
 
       # Add Date time to Log File
-      self.logfilename = self.format_filename('flatten_ip_tracker.log', '_flat')
+      self.logfilename = self.format_filename('./log/flatten_ip_tracker.log', '_flat')
 
       if(not logger):
           self.logger = self.log(self.logfilename)
@@ -68,6 +68,11 @@ class Flatten(object):
             raise
 
     def read_excel(self,filename="",sh="sheet",skip=[0,1,2,3]): 
+       exists =  os.path.isfile(filename)
+    
+       if not os.path.isfile(filename):
+           self.logger.error("File does not Exist:\""+str(filename) + "\"")
+           sys.exit()
        # read by default 1st sheet of an excel file
        xls = pd.ExcelFile(filename)
        # error on .parse using read_excel
@@ -403,6 +408,10 @@ class Flatten(object):
         self.logger.info("Data Directories: " + "Inputdir: " + str(inputdir) + " Outputdir: " +  str(inputdir) )
          
         links = self.ptr.read_file(ip_tracker_file)
+        if not links:
+            self.logger.error("No Data found for File:" + str(ip_tracker_file) )
+            sys.exit()
+
         for link in links.splitlines():
 
           #New Timestamp Per File:
@@ -622,10 +631,33 @@ class Flatten(object):
         #ptr= process_test_runs.Process_Test_Runs(self.logger)
         #ptr.init_parameters(data)
         self.ptr.txt_cyc_suite_tr(data)
-
+    def get_args_data(self,data=None,length=None):
+        outdata = None
+        if length == 1:
+            for d in data:
+                outdata = d
+        return outdata
     def main(self,args):
     
         data =None
+
+        if args.project:
+            data = self.get_args_data(args.project,1)
+            self.logger.info("Setting new Project:\"" + str(data) + "\"" )
+            self.ptr.set_project(data)
+
+        if args.module:
+            data = self.get_args_data(args.module,1)
+            self.logger.info("Setting Module or Req/Test Cases:\"" + str(data) + "\"")
+            self.ptr.project_module_name = data
+
+        if args.uudate:
+            data = self.get_args_data(args.uudate,1)
+            self.logger.info("Setting UUDate ro Pre/Post Silicon Test Execution:" + str(data) )
+            self.ptr.set_uudate(data )
+
+
+
         if args.flatdir:
             self.flatdir(args.flatdir)
 
@@ -641,7 +673,8 @@ class Flatten(object):
 
         if args.txt_flat_cyc_suite_tr:
             data = self.txt_flat_cyc_suite_tr(args.txt_flat_cyc_suite_tr)
-   
+
+
         return data
 
 
@@ -656,6 +689,11 @@ parser.add_argument('-cmb', '--combine', nargs=3, type=str, help='Excel Request 
 #input is a cut down diags_raw_data Sheet. Supports Pre-silicon and Post Silicon Rus for same Test Cases.
 parser.add_argument('-ctr', '--cyc_suite_tr', nargs=3, type=str, help='Excel <test runs excel> <exec True/[False]> <skip to expanded line number>') 
 parser.add_argument('-txt_fctr', '--txt_flat_cyc_suite_tr', nargs=1, type=str, help='<link file.txt> <exec True/[False]> <skip to expanded line number>') 
+
+parser.add_argument('-prj', '--project', nargs=1, type=str, help='Enter the Project Name <Diags-Viola>') 
+parser.add_argument('-mod', '--module', nargs=1, type=str, help='The Name of the Requirments Module Will create a new one if needed. I.e.<Viola>') 
+parser.add_argument('-uu', '--uudate', nargs=1, type=str, help='Enter the Proposed UU date. Pre-Silicon Test Runs will be earlier than this date. ') 
+
 
 # combine_req_ip
 
@@ -676,18 +714,23 @@ parser.add_argument('-txt_fctr', '--txt_flat_cyc_suite_tr', nargs=1, type=str, h
 
 ##
 #sys.argv.append('--txt_flat_cyc_suite_tr')
-#sys.argv.append('./MI3XX/iptracker_single_PSP.txt')
+#sys.argv.append('./venice/iptracker_DF.txt')
 # sys.argv.append(False)
 #sys.argv.append('0')
 
+# sys.argv.append('-prj')
+# sys.argv.append('Diags-Viola')
+
+# sys.argv.append('-mod')
+# sys.argv.append('Viola')
+
+# sys.argv.append('-uu')
+# sys.argv.append('2025-07-30T00:00:00-0400')
+
+# sys.argv.append('--txt_flat_cyc_suite_tr')
+# sys.argv.append('.\Viola\iptracker_single_GFX.txt')
 
 
-
-
-# cmd line: python flatten.py --cyc_suite_tr ./outputdir/<file> False None/number
-
-# sys.argv.append('--combine')
-# sys.argv.append('../Diags-NV48 - Requirement - 20240206.xlsx')
 
 args = parser.parse_args()
 
