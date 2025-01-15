@@ -1335,7 +1335,7 @@ class Process_Test_Runs(object):
             planned_str = datetime.strftime(self.format_eta(planned,''),"%Y-%m-%dT%H:%M:%S%z") 
         else:
            planned = self.post_wk1_date
-           self.logger.info("PreSilicon Date: " + str(self.post_wk1_date))
+           self.logger.info("PostSilicon Date: " + str(self.post_wk1_date))
 #           planned = self.config['dates']['post_week1']
 
            # Run at Start Date.

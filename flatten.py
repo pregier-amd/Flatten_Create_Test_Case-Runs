@@ -692,7 +692,7 @@ parser.add_argument('-txt_fctr', '--txt_flat_cyc_suite_tr', nargs=1, type=str, h
 
 parser.add_argument('-prj', '--project', nargs=1, type=str, help='Enter the Project Name <Diags-Viola>') 
 parser.add_argument('-mod', '--module', nargs=1, type=str, help='The Name of the Requirments Module Will create a new one if needed. I.e.<Viola>') 
-parser.add_argument('-uu', '--uudate', nargs=1, type=str, help='Enter the Proposed UU date. Pre-Silicon Test Runs will be earlier than this date. ') 
+parser.add_argument('-uu', '--uudate', nargs=1, type=str, help='Enter the Proposed UU date. Pre-Silicon Test Runs will be earlier than this date. eg.2025-10-27T00:00:00-0400') 
 
 
 # combine_req_ip
